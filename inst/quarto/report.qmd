@@ -1,0 +1,537 @@
+---
+title: "单细胞测序分析报告"
+lang: zh
+format:
+  html:
+    title-block-banner: true
+    page-layout: full
+    toc: true
+    toc-location: left
+    toc-depth: 4
+    toc-float:
+      collapsed: true
+    number-sections: true
+    theme: [lumen, report.scss]
+    fontsize: 15pt
+    embed-resources: true
+    df-print: paged
+    include-in-header:
+      text: |
+        <style>
+          nav#TOC { width: 360px; font-size: 11px; }
+          main.content { margin-left: 35px; }
+          .summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:.9rem; margin:1rem 0 1.5rem; }
+          .summary-card { border:1px solid #dce3e8; border-radius:.65rem; padding:.85rem 1rem; background:#fff; box-shadow:0 2px 8px rgba(15,23,42,.05); }
+          .summary-card .label { color:#64748b; font-size:.8rem; text-transform:uppercase; letter-spacing:.03em; }
+          .summary-card .value { color:#14213d; font-size:1.05rem; font-weight:700; margin-top:.25rem; overflow-wrap:anywhere; }
+          .table-note { margin:.65rem 0 1.8rem; padding:.8rem 1rem; background:#f5f9fb; border-left:4px solid #168aad; color:#374151; font-size:.9rem; }
+          .table-note p { margin:0 0 .35rem; }
+          .table-note ul { margin:.35rem 0 0; padding-left:1.25rem; }
+          .table-note code { color:#0f4c5c; font-weight:600; }
+          .report-alert { padding:.8rem 1rem; border-radius:.5rem; background:#fff8e6; border:1px solid #f3d58b; margin:.75rem 0 1.25rem; }
+          .report-download { display:inline-flex!important; align-items:center; justify-content:center; min-width:7.5rem; padding:.55rem 1rem!important; border:0; border-radius:.4rem; background:#168aad; color:#fff!important; font-family:inherit; font-size:.9rem; font-weight:700; line-height:1.25; text-decoration:none!important; white-space:nowrap; cursor:pointer; }
+          .report-download:hover { background:#0f6f8b; }
+          .dt-buttons .dt-button { min-width:6.5rem!important; padding:.5rem .9rem!important; font-size:.9rem!important; font-weight:600!important; white-space:nowrap!important; border-radius:.35rem!important; }
+          .dataTables_wrapper { overflow-x:auto; margin-bottom:.3rem; }
+          table.dataTable td { max-width:320px; white-space:normal; overflow-wrap:anywhere; vertical-align:top; }
+          table.dataTable th { white-space:nowrap; }
+          .compact-table { width:100%; margin-bottom:.4rem; }
+          .compact-table th { background:#edf4f7; }
+          details.column-guide { margin:.4rem 0 1.5rem; }
+          details.column-guide summary { cursor:pointer; color:#0f6f8b; font-weight:600; }
+          .figure-note { color:#52606d; font-size:.9rem; margin:.25rem 0 1.4rem; }
+          @media (max-width: 900px) { nav#TOC { width:auto; } main.content { margin-left:0; } }
+        </style>
+execute:
+  echo: false
+  warning: false
+  message: false
+params:
+  manifest: null
+---
+
+```{r setup}
+options(encoding = "UTF-8", width = 120)
+manifest <- readRDS(params$manifest)
+files <- manifest$files
+`%||%` <- function(x, y) if (is.null(x) || !length(x)) y else x
+
+fmt_bytes <- function(x) {
+  vapply(x, function(value) {
+    if (is.na(value)) "" else format(structure(value, class = "object_size"), units = "auto")
+  }, character(1))
+}
+
+read_report_table <- function(index, nrows = -1L) {
+  if (!length(index) || is.na(index[[1L]])) return(NULL)
+  tryCatch(
+    utils::read.csv(file.path(manifest$output, files$path[index[[1L]]]),
+                    nrows = nrows, check.names = FALSE, fileEncoding = "UTF-8"),
+    error = function(e) NULL
+  )
+}
+
+dt_buttons <- list(
+  list(extend = "copy", text = "复制"),
+  list(extend = "csv", text = "下载 CSV"),
+  list(extend = "excel", text = "下载 Excel")
+)
+
+show_table <- function(x, page_length = 10L, buttons = TRUE, filter = FALSE, escape = TRUE) {
+  if (!requireNamespace("DT", quietly = TRUE)) return(knitr::kable(utils::head(x, 100L)))
+  options <- list(
+    pageLength = page_length, scrollX = TRUE, autoWidth = TRUE,
+    deferRender = TRUE, dom = if (buttons) "Bfrtip" else "frtip"
+  )
+  args <- list(x, rownames = FALSE, escape = escape, options = options)
+  if (filter) args$filter <- "top"
+  if (buttons) {
+    args$extensions <- "Buttons"
+    args$options$buttons <- dt_buttons
+  }
+  do.call(DT::datatable, args)
+}
+
+static_table <- function(x) {
+  htmltools::HTML(knitr::kable(
+    x, format = "html", escape = TRUE,
+    table.attr = "class='table table-striped table-hover compact-table'"
+  ))
+}
+
+table_note <- function(row_meaning, fields) {
+  items <- lapply(seq_along(fields), function(i) {
+    htmltools::tags$li(htmltools::tags$code(names(fields)[i]), paste0("：", fields[[i]]))
+  })
+  htmltools::div(
+    class = "table-note",
+    htmltools::tags$p(htmltools::tags$strong("表格说明："), row_meaning),
+    htmltools::tags$ul(items)
+  )
+}
+
+field_meaning <- function(name) {
+  exact <- c(
+    cell = "细胞条形码或唯一细胞名称。",
+    feature = "基因、转录本或其他 feature 名称；对应表达矩阵的一行。",
+    sample_id = "从输入 RDS 元数据或细胞名识别出的样本名称。",
+    group = "根据 sample_map 或样本名推断的实验组；需要结合实验设计核对。",
+    replicate = "样本名中识别的重复编号；NA 表示未识别或无重复。",
+    confidence = "分组推断置信度：user、high、medium 或 low。",
+    needs_review = "TRUE 表示分组建议需要人工复核。",
+    grouping_rule = "本次分组采用的简短规则代码。",
+    n_cells = "该样本包含的细胞数量。",
+    section = "文件所属结果类别。",
+    label = "文件内容名称。",
+    dimensions = "表格或矩阵的行数 × 列数。",
+    size = "磁盘文件大小。",
+    storage = "HTML 内置表示单独发送 report.html 后仍可下载；output 文件表示需同时发送结果文件夹。",
+    note = "文件内容或矩阵方向说明。",
+    download = "下载完整文件；按钮文字会标明是 HTML 内置还是 output 文件。",
+    item = "检查项目或对象属性名称。",
+    value = "该项目对应的值。"
+  )
+  if (name %in% names(exact)) return(unname(exact[[name]]))
+  if (grepl("^nFeature", name, ignore.case = TRUE)) return("该细胞检测到的 feature/基因数量。")
+  if (grepl("^nCount", name, ignore.case = TRUE)) return("该细胞的总计数或 UMI 数量。")
+  if (grepl("percent.*mt|mito", name, ignore.case = TRUE)) return("线粒体表达占比；字段定义沿用输入 RDS。")
+  if (grepl("cluster|snn_res", name, ignore.case = TRUE)) return("聚类编号或聚类分辨率结果。")
+  if (grepl("cell.?type|annotation|predicted", name, ignore.case = TRUE)) return("输入 RDS 中已有的细胞类型或注释字段；本包未改写该列。")
+  if (grepl("p_val|pvalue|p\\.value|p_val_adj|padj", name, ignore.case = TRUE)) return("差异检验的 P 值或多重检验校正 P 值。")
+  if (grepl("avg_log|logfc|fold", name, ignore.case = TRUE)) return("表达差异的对数倍数变化。")
+  if (grepl("pct", name, ignore.case = TRUE)) return("表达该 feature 的细胞比例。")
+  if (grepl("gene|feature", name, ignore.case = TRUE)) return("marker 或 feature 名称。")
+  "来自输入 RDS 或分析对象的原始字段；具体实验含义由数据创建者定义。"
+}
+
+dictionary_note <- function(x, row_meaning) {
+  fields <- stats::setNames(vapply(names(x), field_meaning, character(1)), names(x))
+  table_note(row_meaning, fields)
+}
+
+embedding_options <- manifest$download_embedding %||% list(mode = "never", max_bytes = 0)
+embedding_mode <- embedding_options$mode %||% "never"
+embedding_budget <- as.numeric(embedding_options$max_bytes %||% 0)
+full_file_paths <- file.path(manifest$output, files$path)
+file_sizes <- as.numeric(files$bytes)
+missing_size <- is.na(file_sizes) & file.exists(full_file_paths)
+file_sizes[missing_size] <- as.numeric(file.info(full_file_paths[missing_size])$size)
+files$embedded <- FALSE
+existing_rows <- which(file.exists(full_file_paths) & !is.na(file_sizes))
+if (identical(embedding_mode, "always")) {
+  files$embedded[existing_rows] <- TRUE
+} else if (identical(embedding_mode, "auto") && embedding_budget > 0) {
+  section_priority <- c(
+    "annotation_original", "metadata_original", "annotation_analysis",
+    "metadata_analysis", "design", "matrix_preview", "analysis_result",
+    "embedding", "inventory", "features", "provenance", "expression_matrix", "rds"
+  )
+  priority <- match(files$section, section_priority, nomatch = length(section_priority) + 1L)
+  candidates <- existing_rows[order(priority[existing_rows], file_sizes[existing_rows])]
+  used_bytes <- 0
+  for (i in candidates) {
+    if (file_sizes[i] <= embedding_budget - used_bytes) {
+      files$embedded[i] <- TRUE
+      used_bytes <- used_bytes + file_sizes[i]
+    }
+  }
+}
+
+embedded_ids <- paste0("scrds-embedded-", seq_len(nrow(files)))
+encode_file_tags <- function(index, chunk_bytes = 3L * 1024L * 1024L) {
+  connection <- file(full_file_paths[index], open = "rb")
+  on.exit(close(connection), add = TRUE)
+  part <- 0L
+  tags <- list()
+  repeat {
+    raw_chunk <- readBin(connection, what = "raw", n = chunk_bytes)
+    if (!length(raw_chunk)) break
+    part <- part + 1L
+    tags[[part]] <- htmltools::tags$script(
+      type = "application/octet-stream",
+      `data-scrds-file` = embedded_ids[index],
+      `data-part` = part,
+      `data-filename` = basename(files$path[index]),
+      htmltools::HTML(jsonlite::base64_enc(raw_chunk))
+    )
+  }
+  htmltools::tagList(tags)
+}
+
+asset_rows <- which(files$embedded)
+embedded_download_assets <- htmltools::tagList(
+  lapply(asset_rows, encode_file_tags),
+  htmltools::tags$script(htmltools::HTML(
+    "window.scRDSDownload=function(id){const nodes=Array.from(document.querySelectorAll('script[data-scrds-file=\"'+id+'\"]')).sort((a,b)=>Number(a.dataset.part)-Number(b.dataset.part));if(!nodes.length){return;}const chunks=nodes.map(node=>{const binary=atob(node.textContent.replace(/\\s/g,''));const bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++){bytes[i]=binary.charCodeAt(i);}return bytes;});const url=URL.createObjectURL(new Blob(chunks,{type:'application/octet-stream'}));const link=document.createElement('a');link.href=url;link.download=nodes[0].dataset.filename;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);};"
+  ))
+)
+
+download_link <- function(index) {
+  if (isTRUE(files$embedded[index])) {
+    return(sprintf(
+      "<button type='button' class='report-download' onclick=\"scRDSDownload('%s')\">内置下载</button>",
+      embedded_ids[index]
+    ))
+  }
+  href <- utils::URLencode(files$path[index], reserved = FALSE)
+  sprintf("<a class='report-download' href='%s' download>下载文件</a>", href)
+}
+
+file_table <- files
+file_table$dimensions <- ifelse(
+  is.na(file_table$rows), "",
+  paste0(file_table$rows, " x ", ifelse(is.na(file_table$columns), "", file_table$columns))
+)
+file_table$size <- fmt_bytes(file_table$bytes)
+file_table$storage <- ifelse(file_table$embedded, "HTML 内置", "output 文件")
+file_table$download <- vapply(seq_len(nrow(file_table)), download_link, character(1))
+file_table <- file_table[c("section", "label", "dimensions", "size", "storage", "note", "download")]
+```
+
+```{r embedded-download-assets}
+embedded_download_assets
+```
+
+# 运行概览
+
+```{r overview}
+summary_values <- list(
+  "输入文件" = basename(manifest$input),
+  "分析前状态" = manifest$status_before,
+  "分析后状态" = manifest$status_after,
+  "SCP" = if (isTRUE(manifest$scp_was_run)) "已运行" else "保留已有分析",
+  "分析细胞" = paste0(manifest$analysis_subset$cells_after, " / ", manifest$analysis_subset$cells_before),
+  "分析 feature" = paste0(manifest$analysis_feature_subset$features_after, " / ", manifest$analysis_feature_subset$features_before),
+  "HTML 内置下载" = paste0(sum(files$embedded), " / ", nrow(files)),
+  "物种" = manifest$species$selected %||% "unknown",
+  "生成时间" = manifest$created_at
+)
+cards <- lapply(names(summary_values), function(name) {
+  htmltools::div(
+    class = "summary-card",
+    htmltools::div(class = "label", name),
+    htmltools::div(class = "value", as.character(summary_values[[name]]))
+  )
+})
+htmltools::div(class = "summary-grid", cards)
+```
+
+本节汇总输入、对象状态和实际执行范围。若显示“分析细胞/feature”为子集，完整原始 RDS 与原始 counts 矩阵仍单独导出。
+
+## 过滤与分析决策
+
+```{r filtering-summary}
+filter_table <- data.frame(
+  stage = c("Barcode filtering", "Feature filtering", "Cluster markers"),
+  applied = c(
+    manifest$barcode_filtering$applied,
+    manifest$feature_filtering$applied,
+    manifest$marker_analysis$ran %||% FALSE
+  ),
+  before = c(
+    manifest$barcode_filtering$cells_before,
+    manifest$feature_filtering$features_before,
+    ""
+  ),
+  after = c(
+    manifest$barcode_filtering$cells_after,
+    manifest$feature_filtering$features_after,
+    manifest$marker_analysis$engine %||% "not run"
+  ),
+  stringsAsFactors = FALSE
+)
+htmltools::tagList(
+  static_table(filter_table),
+  table_note(
+    "每行代表一个自动处理阶段。长篇 reason 不放入主表，以避免挤压页面；完整决策仍保存在 manifest.json。",
+    c(stage = "处理阶段。", applied = "是否执行。", before = "执行前数量。", after = "执行后数量或所用引擎。")
+  )
+)
+```
+
+```{r decision-details}
+decision_text <- c(
+  paste0("Barcode：", manifest$barcode_filtering$reason %||% ""),
+  paste0("Feature：", manifest$feature_filtering$reason %||% "")
+)
+htmltools::tags$details(
+  class = "column-guide",
+  htmltools::tags$summary("查看自动决策说明"),
+  htmltools::tags$ul(lapply(decision_text, htmltools::tags$li))
+)
+```
+
+# 样本设计与分组
+
+```{r sample-design}
+design_columns <- intersect(
+  c("sample_id", "group", "replicate", "confidence", "needs_review", "grouping_rule", "n_cells"),
+  names(manifest$sample_design)
+)
+design_table <- manifest$sample_design[design_columns]
+htmltools::tagList(
+  show_table(design_table, page_length = 10L, buttons = TRUE, filter = FALSE),
+  dictionary_note(design_table, "每行代表一个样本。分组来自用户 sample_map 或对样本名的保守推断，不会凭空制造生物学重复。")
+)
+```
+
+`grouping_rule` 是简短的分组审计代码，不是生物学结果。`needs_review = TRUE` 时，请在正式组间比较前用 `sample_map` 明确样本、组别和重复。
+
+# 表达矩阵
+
+表达矩阵始终遵循单细胞通用方向：**每行是 feature/基因，每列是细胞名称，矩阵值是 counts 或标准化表达量**。Matrix Market 文件本身不保存行列名，因此必须与对应的 `features.tsv.gz` 和 `barcodes.tsv.gz` 一起使用。
+
+## 矩阵预览
+
+```{r matrix-preview, results='asis'}
+matrix_preview_rows <- which(files$section == "matrix_preview")
+if (!length(matrix_preview_rows)) {
+  cat("<div class='report-alert'>没有可读取的表达矩阵预览；请检查输入对象的 assay/layer。</div>")
+} else {
+  for (i in matrix_preview_rows) {
+    preview <- read_report_table(i)
+    if (is.null(preview)) next
+    cat("### ", files$label[i], "\n\n", sep = "")
+    print(htmltools::tagList(
+      show_table(preview, page_length = nrow(preview), buttons = TRUE, filter = FALSE),
+      dictionary_note(
+        preview,
+        "每行是一个 feature/基因；第一列 feature 是行名，其余每一列的列名都是一个真实细胞名称。此处仅为小预览，完整稀疏矩阵请在下表下载。"
+      )
+    ))
+    cat("\n\n")
+  }
+}
+```
+
+## 矩阵文件
+
+```{r matrix-files}
+matrix_file_table <- file_table[files$section == "expression_matrix", , drop = FALSE]
+htmltools::tagList(
+  show_table(matrix_file_table, page_length = 20L, buttons = TRUE, filter = FALSE, escape = FALSE),
+  dictionary_note(matrix_file_table, "每行代表一个矩阵文件或其行名/列名文件。original 表示输入 RDS 的原始 counts；analysis 表示报告分析对象的指定 layer。")
+)
+```
+
+# 细胞元数据与已有注释
+
+```{r annotation-message}
+annotation_info <- manifest$annotation %||% list(source = "none")
+if (identical(annotation_info$source, "none")) {
+  htmltools::div(
+    class = "report-alert",
+    "输入 RDS 中未检测到细胞类型注释列。本报告不会自行添加或猜测细胞类型；SCP 产生的 cluster 仍会正常展示。"
+  )
+} else {
+  htmltools::div(
+    class = "report-alert",
+    paste0("已原样保留输入 RDS 注释列：", paste(annotation_info$columns, collapse = ", "),
+           "。主要展示列：", annotation_info$primary_column %||% "未指定", "。")
+  )
+}
+```
+
+## 原始 RDS 注释表
+
+```{r annotation-table}
+annotation_row <- which(files$section == "annotation_original")[1]
+annotation_table <- read_report_table(annotation_row, nrows = 2000L)
+if (is.null(annotation_table)) {
+  htmltools::div(class = "report-alert", "没有输入 RDS 注释表可展示。")
+} else {
+  htmltools::tagList(
+    show_table(annotation_table, page_length = 15L, buttons = TRUE, filter = TRUE),
+    dictionary_note(annotation_table, "每行代表原始 RDS 中的一个细胞；第一列是细胞名称，其余列全部来自输入 RDS 的已有注释。该表在过滤和分析子集之前导出，HTML 最多预览 2,000 行。")
+  )
+}
+```
+
+## 分析对象细胞元数据
+
+```{r metadata-table}
+metadata_row <- which(files$section == "metadata_analysis")[1]
+metadata <- read_report_table(metadata_row)
+if (is.null(metadata)) {
+  htmltools::div(class = "report-alert", "没有可读取的细胞元数据。")
+} else {
+  annotation_columns <- annotation_info$analysis_columns %||% annotation_info$columns %||% character()
+  priority <- unique(c(
+    "cell", annotation_info$primary_column, annotation_columns,
+    grep("sample|orig.ident|group", names(metadata), value = TRUE, ignore.case = TRUE),
+    grep("cluster|snn_res", names(metadata), value = TRUE, ignore.case = TRUE),
+    grep("^nCount|^nFeature|percent.*mt|mito", names(metadata), value = TRUE, ignore.case = TRUE)
+  ))
+  priority <- priority[!is.na(priority) & priority %in% names(metadata)]
+  display_columns <- utils::head(priority, 14L)
+  metadata_preview <- utils::head(metadata[display_columns], 2000L)
+  htmltools::tagList(
+    show_table(metadata_preview, page_length = 15L, buttons = TRUE, filter = TRUE),
+    dictionary_note(metadata_preview, "每行代表分析对象中的一个细胞。为了避免超宽页面，只展示优先级最高的样本、原始注释、cluster 和 QC 字段；原始 RDS 全部细胞元数据与分析对象元数据分别提供下载。")
+  )
+}
+```
+
+# 降维与聚类
+
+降维图优先使用输入 RDS 已有注释着色；没有注释时依次使用 cluster、样本组或样本列。颜色使用 `ggsci` 的 AAAS、IGV、BMJ 和 NEJM 科研配色组合。
+
+```{r reduction-plots, results='asis', fig.width=8, fig.height=6}
+embedding_rows <- which(files$section == "embedding" & files$columns >= 3L)
+if (length(embedding_rows)) {
+  labels_lower <- tolower(files$label[embedding_rows])
+  preferred <- c(
+    embedding_rows[which(grepl("umap", labels_lower))[1]],
+    embedding_rows[which(grepl("tsne|t-sne", labels_lower))[1]]
+  )
+  preferred <- unique(preferred[!is.na(preferred)])
+  if (!length(preferred)) preferred <- embedding_rows[[1L]]
+
+  color_candidates <- unique(c(
+    annotation_info$primary_column,
+    annotation_info$analysis_columns %||% annotation_info$columns,
+    grep("cluster|snn_res", names(metadata), value = TRUE, ignore.case = TRUE),
+    intersect(c(".scRDSreport_group", ".scRDSreport_sample", "sample", "orig.ident"), names(metadata))
+  ))
+  color_candidates <- color_candidates[!is.na(color_candidates) & color_candidates %in% names(metadata)]
+  color_col <- if (length(color_candidates)) color_candidates[[1L]] else NULL
+
+  sci_palette <- unique(c(
+    ggsci::pal_aaas("default")(10),
+    ggsci::pal_igv("default")(10),
+    ggsci::pal_bmj("default")(9),
+    ggsci::pal_nejm("default")(8)
+  ))
+
+  for (i in preferred) {
+    embedding <- read_report_table(i)
+    if (is.null(embedding) || ncol(embedding) < 3L) next
+    x_col <- names(embedding)[2L]
+    y_col <- names(embedding)[3L]
+    if (!is.null(color_col) && !is.null(metadata) && "cell" %in% names(metadata)) {
+      embedding[[color_col]] <- metadata[[color_col]][match(embedding$cell, metadata$cell)]
+    }
+    mapping <- if (is.null(color_col)) {
+      ggplot2::aes(x = .data[[x_col]], y = .data[[y_col]])
+    } else {
+      ggplot2::aes(x = .data[[x_col]], y = .data[[y_col]], color = .data[[color_col]])
+    }
+    plot <- ggplot2::ggplot(embedding, mapping) +
+      ggplot2::geom_point(size = 0.45, alpha = 0.8) +
+      ggplot2::theme_bw(base_size = 13) +
+      ggplot2::theme(
+        panel.grid = ggplot2::element_blank(),
+        panel.border = ggplot2::element_rect(color = "black", linewidth = 0.55),
+        legend.position = "right",
+        plot.title = ggplot2::element_text(face = "bold", hjust = 0.5)
+      ) +
+      ggplot2::coord_equal() +
+      ggplot2::labs(title = files$label[i], x = x_col, y = y_col, color = color_col)
+    if (!is.null(color_col)) {
+      n_levels <- length(unique(stats::na.omit(as.character(embedding[[color_col]]))))
+      colors <- if (n_levels <= length(sci_palette)) sci_palette[seq_len(max(1L, n_levels))] else grDevices::colorRampPalette(sci_palette)(n_levels)
+      plot <- plot + ggplot2::scale_color_manual(values = colors, na.value = "grey80", drop = FALSE)
+    }
+    cat("## ", files$label[i], "\n\n", sep = "")
+    print(plot)
+    cat("\n<div class='figure-note'>每个点代表一个细胞；横轴和纵轴为该降维结果的前两个坐标。颜色字段：<code>",
+        color_col %||% "none", "</code>。完整坐标表可在数据下载区取得。</div>\n\n", sep = "")
+  }
+} else {
+  cat("<div class='report-alert'>对象中没有可绘制的二维降维坐标。</div>")
+}
+```
+
+# Cluster marker
+
+```{r marker-table}
+marker_rows <- which(files$section == "analysis_result" & grepl("cluster_markers|marker", files$label, ignore.case = TRUE))
+marker_table <- read_report_table(marker_rows[1], nrows = 3000L)
+if (is.null(marker_table)) {
+  htmltools::div(class = "report-alert", "对象中没有可展示的 cluster marker 表。")
+} else {
+  htmltools::tagList(
+    show_table(marker_table, page_length = 15L, buttons = TRUE, filter = TRUE),
+    dictionary_note(marker_table, "每行代表一个 cluster 与一个候选 marker feature 的差异表达结果。HTML 最多预览 3,000 行；完整表在数据下载区。")
+  )
+}
+```
+
+# 对象内容
+
+## 分析前
+
+```{r inventory-before}
+htmltools::tagList(
+  static_table(manifest$inventory_before),
+  dictionary_note(manifest$inventory_before, "每行代表输入对象的一项结构属性，例如 assay、reduction、cluster 或分析状态。")
+)
+```
+
+## 分析后
+
+```{r inventory-after}
+htmltools::tagList(
+  static_table(manifest$inventory_after),
+  dictionary_note(manifest$inventory_after, "每行代表报告分析对象的一项结构属性，可用于核对 SCP 是否新增 reduction、graph 或 cluster。")
+)
+```
+
+# 数据下载
+
+下表列出全部结果。标为“HTML 内置”的文件在只发送 `report.html` 时仍可直接下载；标为“output 文件”的大型文件需要连同整个 output 文件夹一起发送。默认 `auto` 优先内置注释和结果表，并限制 HTML 体积；如确实需要把原始 RDS 和全部矩阵强制装入单个 HTML，可使用 `embed_downloads = "always"`，但报告可能非常大。
+
+```{r download-table}
+htmltools::tagList(
+  show_table(file_table, page_length = 25L, buttons = TRUE, filter = TRUE, escape = FALSE),
+  dictionary_note(file_table, "每行代表一个完整结果文件；storage 指明文件是否已经内置到单个 HTML，矩阵相关文件的 note 明确记录行列方向。")
+)
+```
+
+# 可重复性信息
+
+以下内容记录生成本报告时的 R、平台和已加载包版本。它不是结果表，不参与统计解释。
+
+```{r session-info}
+cat(paste(manifest$session_info, collapse = "\n"))
+```

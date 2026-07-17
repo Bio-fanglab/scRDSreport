@@ -1,0 +1,41 @@
+Package: scRDSreport
+Type: Package
+Title: Reproducible Reports from Single-Cell RDS Files
+Version: 0.1.0
+Authors@R: person("Anbuengsi", role = c("aut", "cre"), email = "an.bunengsi@qq.com")
+Description: Inspects single-cell RDS files, preserves and exports existing
+    Seurat analyses, optionally completes minimally processed objects with the
+    SCP package, and renders a Quarto HTML report with downloadable tables,
+    expression matrices, metadata, and RDS files. Conservative sample-name
+    parsing proposes biological groups and replicates with confidence flags.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Depends: R (>= 4.1.0)
+Imports:
+    BiocParallel,
+    DT,
+    Matrix,
+    SCP (>= 0.5.6),
+    Seurat,
+    SeuratObject,
+    ggplot2 (>= 3.4.0),
+    ggsci,
+    htmltools,
+    jsonlite,
+    knitr,
+    methods,
+    stats,
+    tools,
+    utils
+Suggests:
+    quarto,
+    SingleCellExperiment,
+    SummarizedExperiment,
+    testthat (>= 3.0.0)
+Remotes:
+    zhanghao-njmu/SCP
+URL: https://github.com/Bio-fanglab/scRDSreport
+BugReports: https://github.com/Bio-fanglab/scRDSreport/issues
+SystemRequirements: Quarto CLI (>= 1.3)
+Config/testthat/edition: 3
+Config/roxygen2/version: 8.0.0

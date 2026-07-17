@@ -1,0 +1,36 @@
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+name: R-CMD-check
+
+jobs:
+  R-CMD-check:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          # SCP lists many integration engines as optional Suggests. Installing
+          # every transitive Suggest would make a standard package check depend
+          # on unrelated GitHub-only tools such as symphony. Install hard
+          # dependencies recursively and list this package's own Suggests below.
+          dependencies: '"hard"'
+          extra-packages: |
+            any::rcmdcheck
+            any::testthat
+            any::quarto
+            bioc::SingleCellExperiment
+            bioc::SummarizedExperiment
+            github::zhanghao-njmu/SCP
+          needs: check
+      - uses: r-lib/actions/check-r-package@v2
+        with:
+          upload-snapshots: true
