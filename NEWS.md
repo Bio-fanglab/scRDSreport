@@ -6,3 +6,5 @@
 - Existing RDS annotations are preserved without generated cell-type labels.
 - UTF-8, DT downloads, ggsci reduction plots, and per-table data dictionaries.
 - Conservative sample-group and replicate inference with review flags.
+- Fixed Quarto rendering when numeric cluster identifiers are colored with the
+  discrete SCI palette.

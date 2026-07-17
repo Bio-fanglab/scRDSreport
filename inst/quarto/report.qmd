@@ -450,6 +450,10 @@ if (length(embedding_rows)) {
     y_col <- names(embedding)[3L]
     if (!is.null(color_col) && !is.null(metadata) && "cell" %in% names(metadata)) {
       embedding[[color_col]] <- metadata[[color_col]][match(embedding$cell, metadata$cell)]
+      # Cluster identifiers are often read from CSV as integers.  They are
+      # categories, not continuous measurements, and must stay compatible with
+      # the discrete SCI palette used below.
+      embedding[[color_col]] <- factor(embedding[[color_col]])
     }
     mapping <- if (is.null(color_col)) {
       ggplot2::aes(x = .data[[x_col]], y = .data[[y_col]])
