@@ -60,4 +60,10 @@ test_that("a report renders with numeric cluster identifiers", {
   expect_gt(file.info(result$report)$size, 10000)
   html <- paste(readLines(result$report, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
   expect_match(html, "seurat_clusters", fixed = TRUE)
+  expect_match(html, "<div class=\"interpretation-term\">rows（行）</div>", fixed = TRUE)
+  expect_false(grepl(
+    "<pre><code>&lt;div class=&quot;interpretation-term&quot;&gt;",
+    html,
+    fixed = TRUE
+  ))
 })

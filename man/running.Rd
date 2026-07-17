@@ -11,9 +11,10 @@ running(
   sample_map = NULL,
   filter_raw_barcodes = c("auto", "always", "never"),
   min_features = 200L,
-  min_counts = 0L,
-  max_features = Inf,
+  min_counts = 500L,
+  max_features = 7500L,
   max_counts = Inf,
+  max_percent_mt = 20,
   filter_low_expression_features = c("auto", "always", "never"),
   min_cells_per_feature = 3L,
   analyze = c("auto", "always", "never"),
@@ -23,6 +24,7 @@ running(
   marker_args = list(),
   annotation_col = NULL,
   species = "auto",
+  config = NULL,
   analysis_max_cells = Inf,
   analysis_max_features = Inf,
   matrix_layers = c("counts", "data"),
@@ -45,10 +47,12 @@ running(
 `sample_id`, `group`, and optionally `replicate`.}
 
 \item{filter_raw_barcodes}{One of `"auto"`, `"always"`, or `"never"`.
-Auto detects large unfiltered droplet matrices before SCP analysis.}
+Auto applies the supplied QC thresholds before SCP for raw/partial
+objects and preserves already analyzed objects.}
 
-\item{min_features, min_counts, max_features, max_counts}{Cell-level thresholds
-used when raw barcode filtering is applied.}
+\item{min_features, min_counts, max_features, max_counts, max_percent_mt}{Cell-level thresholds used by raw-barcode prefiltering and the full QC
+module. Mitochondrial percentage is calculated after the inexpensive
+count/feature prefilter so multi-million-droplet objects stay tractable.}
 
 \item{filter_low_expression_features}{One of `"auto"`, `"always"`, or
 `"never"`. Auto removes features detected in too few cells from large raw
@@ -58,7 +62,8 @@ objects before SCP analysis; existing analyzed objects are never changed.}
 have a non-zero count.}
 
 \item{analyze}{One of `"auto"`, `"always"`, or `"never"`. Auto runs SCP
-unless both a dimensional reduction and a cluster/annotation column exist.}
+unless both a dimensional reduction and a cluster/annotation column exist;
+without an explicit `config`, analyzed inputs switch to report-only export.}
 
 \item{integration_method}{SCP integration method, or `"none"` (default).
 Automatic integration is deliberately disabled because sample and batch
@@ -77,9 +82,14 @@ When omitted, common annotation column names are detected automatically.
 The package never invents or overwrites cell-type annotations.}
 
 \item{species}{`"auto"` or one non-empty species name, such as `"human"`,
-`"mouse"`, `"rat"`, or `"zebrafish"`. This records provenance only; it
-does not force a species-specific annotation workflow. Auto uses stable
-feature-ID prefixes before gene symbols.}
+`"mouse"`, `"rat"`, or `"zebrafish"`. Auto uses stable feature-ID
+prefixes before gene symbols. Species-specific modules run only when a
+matching resource profile is available.}
+
+\item{config}{A configuration created by \code{\link{report_config}()}. When omitted,
+raw/partial objects use the full profile and analyzed objects use the
+report-only profile. Explicit full profiles can add advanced modules to an
+existing analysis. Existing annotations are preserved by default.}
 
 \item{analysis_max_cells}{Maximum cells passed to SCP. `Inf` (default) keeps
 all retained cells; a finite value creates a deterministic analysis subset
@@ -92,7 +102,8 @@ keeps all retained features; finite values keep the most detected features.}
 
 \item{embed_downloads}{One of `"auto"`, `"always"`, or `"never"`.
 Auto embeds downloadable files into the standalone HTML up to the total
-`embed_max_mb` budget, prioritizing annotation and result tables. Always
+`embed_max_mb` budget, prioritizing module results, annotation and compact
+tables. Always
 forces every exported file into the HTML and can create a very large file.}
 
 \item{embed_max_mb}{Total megabytes available to automatic HTML download
@@ -100,8 +111,10 @@ embedding. This limit is ignored when `embed_downloads = "always"`.}
 
 \item{render}{Whether to render the Quarto HTML report.}
 
-\item{overwrite}{Whether managed files in a non-empty output directory may
-be replaced. Unrelated files are never deleted.}
+\item{overwrite}{Whether managed files in a recognized scRDSreport output
+directory may be replaced. A non-empty unrecognized directory is refused
+even when `TRUE`; unrelated files are never deleted. The input RDS must not
+be stored under a managed subdirectory of the same output.}
 
 \item{seed}{Random seed used by SCP.}
 

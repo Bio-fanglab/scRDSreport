@@ -53,7 +53,14 @@
     "cell.?type|annotation|annotated|predicted[._]?(id|label|celltype)|cell[._]?ontology|^labels?$",
     names(meta), ignore.case = TRUE
   )]
-  candidates <- candidates[!grepl("^\\.scRDSreport_", candidates)]
+  # Internal QC/grouping columns are not annotations.  The one reserved
+  # exception is the explicit full-analysis cell-type namespace; this lets a
+  # saved manual/SingleR result flow into exports and downstream modules without
+  # treating arbitrary .scRDSreport_* metadata as biology.
+  candidates <- candidates[
+    !grepl("^\\.scRDSreport_", candidates) |
+      grepl("^\\.scRDSreport_celltype_", candidates, ignore.case = TRUE)
+  ]
   candidates[vapply(candidates, function(name) {
     values <- meta[[name]]
     n <- length(unique(as.character(values[!is.na(values) & nzchar(as.character(values))])))

@@ -2,10 +2,16 @@
   if (!.is_seurat(object)) return(object)
   map <- inferred$design
   idx <- match(inferred$cell_sample, map$sample_id)
+  confidence <- if ("confidence" %in% names(map)) map$confidence else rep("unknown", nrow(map))
+  needs_review <- if ("needs_review" %in% names(map)) map$needs_review else rep(TRUE, nrow(map))
+  grouping_rule <- if ("grouping_rule" %in% names(map)) map$grouping_rule else rep("unspecified", nrow(map))
   meta <- data.frame(
     .scRDSreport_sample = inferred$cell_sample,
     .scRDSreport_group = map$group[idx],
     .scRDSreport_replicate = map$replicate[idx],
+    .scRDSreport_design_confidence = confidence[idx],
+    .scRDSreport_design_needs_review = needs_review[idx],
+    .scRDSreport_grouping_rule = grouping_rule[idx],
     row.names = colnames(object),
     check.names = FALSE,
     stringsAsFactors = FALSE

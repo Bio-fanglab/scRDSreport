@@ -26,9 +26,38 @@
     (stats::median(features, na.rm = TRUE) < min_features || low_fraction >= 0.5)
 }
 
+.mitochondrial_percent <- function(object) {
+  assay <- tryCatch(SeuratObject::DefaultAssay(object), error = function(e) NULL)
+  if (is.null(assay) || !nzchar(assay)) return(NULL)
+  counts <- .layer_data(object, assay, "counts")
+  if (is.null(counts) || !nrow(counts) || !ncol(counts)) return(NULL)
+  symbols <- rownames(counts)
+  feature_meta <- tryCatch(as.data.frame(object[[assay]][[]]), error = function(e) NULL)
+  if (!is.null(feature_meta) && nrow(feature_meta)) {
+    candidates <- names(feature_meta)[tolower(names(feature_meta)) %in%
+                                        c("gene_symbols", "gene_symbol", "symbol", "gene_name")]
+    if (length(candidates)) {
+      mapped <- as.character(feature_meta[[candidates[[1L]]]])
+      names(mapped) <- rownames(feature_meta)
+      replacement <- mapped[match(rownames(counts), names(mapped))]
+      use <- !is.na(replacement) & nzchar(replacement)
+      symbols[use] <- replacement[use]
+    }
+  }
+  mitochondrial <- grepl("^MT-", symbols, ignore.case = TRUE)
+  if (!any(mitochondrial)) return(NULL)
+  totals <- as.numeric(Matrix::colSums(counts))
+  list(
+    percent = 100 * as.numeric(Matrix::colSums(counts[mitochondrial, , drop = FALSE])) /
+      pmax(totals, 1),
+    features = sum(mitochondrial)
+  )
+}
+
 .prefilter_raw_barcodes <- function(object, mode = c("auto", "always", "never"),
                                     min_features = 200L, min_counts = 0L,
                                     max_features = Inf, max_counts = Inf,
+                                    max_percent_mt = Inf,
                                     verbose = TRUE) {
   mode <- match.arg(mode)
   meta <- .seurat_metadata(object)
@@ -42,6 +71,9 @@
     min_counts = min_counts,
     max_features = max_features,
     max_counts = max_counts,
+    max_percent_mt = max_percent_mt,
+    mitochondrial_features = 0L,
+    cells_removed_mitochondrial = 0L,
     cells_before = nrow(meta),
     cells_after = nrow(meta),
     cells_removed = 0L
@@ -79,12 +111,53 @@
     format(keep_n, big.mark = ","), format(nrow(meta), big.mark = ","), min_features, min_counts
   )
   object <- object[, qc$keep]
+  mitochondrial <- NULL
+  if (is.finite(max_percent_mt)) {
+    mitochondrial <- .mitochondrial_percent(object)
+    if (!is.null(mitochondrial)) {
+      mt_keep <- is.finite(mitochondrial$percent) &
+        mitochondrial$percent <= max_percent_mt
+      mt_keep_n <- sum(mt_keep)
+      if (mt_keep_n < 10L) {
+        .sc_stop(
+          "Mitochondrial filtering would retain only %s cells. Increase max_percent_mt or use filter_raw_barcodes = 'never'.",
+          mt_keep_n
+        )
+      }
+      if (any(!mt_keep)) {
+        .sc_message(
+          verbose,
+          "Filtering mitochondrial outliers: retaining %s of %s cells (percent.mt <= %s)...",
+          format(mt_keep_n, big.mark = ","), format(ncol(object), big.mark = ","),
+          max_percent_mt
+        )
+        object <- object[, mt_keep]
+      }
+      base_summary$mitochondrial_features <- mitochondrial$features
+      base_summary$cells_removed_mitochondrial <- keep_n - mt_keep_n
+      keep_n <- mt_keep_n
+    }
+  }
   base_summary$applied <- TRUE
-  base_summary$reason <- if (identical(mode, "always")) "User-requested barcode filtering." else "Large raw-droplet signature detected automatically."
+  base_summary$reason <- if (identical(mode, "always")) {
+    "User-requested barcode filtering."
+  } else {
+    "Large raw-droplet signature detected automatically."
+  }
+  if (is.finite(max_percent_mt)) {
+    base_summary$reason <- paste0(
+      base_summary$reason,
+      if (is.null(mitochondrial)) {
+        " No mitochondrial gene symbols matched, so the mitochondrial cutoff was recorded but not applied."
+      } else {
+        " The mitochondrial cutoff was evaluated after the inexpensive count/feature prefilter."
+      }
+    )
+  }
   base_summary$feature_column <- qc$columns$features
   base_summary$count_column <- qc$columns$counts
-  base_summary$cells_after <- keep_n
-  base_summary$cells_removed <- nrow(meta) - keep_n
+  base_summary$cells_after <- ncol(object)
+  base_summary$cells_removed <- nrow(meta) - ncol(object)
   list(object = object, summary = base_summary)
 }
 

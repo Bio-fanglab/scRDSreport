@@ -1,18 +1,24 @@
 Package: scRDSreport
 Type: Package
 Title: Reproducible Reports from Single-Cell RDS Files
-Version: 0.1.0
+Version: 0.2.0
 Authors@R: person("Anbuengsi", role = c("aut", "cre"), email = "an.bunengsi@qq.com")
-Description: Inspects single-cell RDS files, preserves and exports existing
-    Seurat analyses, optionally completes minimally processed objects with the
-    SCP package, and renders a Quarto HTML report with downloadable tables,
-    expression matrices, metadata, and RDS files. Conservative sample-name
-    parsing proposes biological groups and replicates with confidence flags.
+Description: Builds reproducible, self-contained single-cell RNA sequencing
+    reports from RDS files. Existing Seurat analyses and annotations are
+    preserved, minimally processed objects can be completed with the SCP
+    package, and eligible quality-control, dimensionality, composition,
+    differential-expression, enrichment, trajectory, communication,
+    cell-cycle, transcription-factor-expression, and copy-number modules are
+    run through a fault-isolated analysis plan. Reports include downloadable
+    matrices, metadata, result tables, figures, data dictionaries, module
+    status, and provenance. Conservative sample-name parsing proposes groups
+    and replicates with confidence flags instead of inventing study design.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Depends: R (>= 4.1.0)
 Imports:
     BiocParallel,
+    digest,
     DT,
     Matrix,
     SCP (>= 0.5.6),
@@ -28,9 +34,40 @@ Imports:
     tools,
     utils
 Suggests:
+    AnnotationDbi,
+    CellChat,
+    celldex,
+    circlize,
+    clusterProfiler,
+    ComplexHeatmap,
+    data.table,
+    dplyr,
+    edgeR,
+    enrichplot,
+    future,
+    GenomicFeatures,
+    ggrepel,
+    GSVA,
+    htmlwidgets,
+    igraph,
+    infercnv,
+    KEGG.db,
+    msigdbr,
+    monocle3,
+    org.Hs.eg.db,
+    org.Mm.eg.db,
+    plotly,
     quarto,
+    rtracklayer,
+    scales,
+    SeuratWrappers,
     SingleCellExperiment,
+    SingleR,
+    stringr,
     SummarizedExperiment,
+    tidyr,
+    TxDb.Hsapiens.UCSC.hg38.knownGene,
+    TxDb.Mmusculus.UCSC.mm10.knownGene,
     testthat (>= 3.0.0)
 Remotes:
     zhanghao-njmu/SCP

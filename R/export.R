@@ -155,7 +155,13 @@
   manifest <- rbind(manifest, .manifest_row("rds", "Report analysis RDS", analyzed_path, output, note = "Includes inferred design and any SCP results"))
 
   design_path <- file.path(output, "tables", "sample_design.csv.gz")
-  manifest <- rbind(manifest, .write_table(sample_design, design_path, "design", "Sample design", output))
+  manifest <- rbind(manifest, .write_table(
+    sample_design, design_path, "design", "Sample design", output,
+    note = paste0(
+      "One row per sample candidate. n_cells_post_qc is measured after barcode QC and before ",
+      "the optional analysis subset; n_cells_analysis is the number represented in analysis results."
+    )
+  ))
 
   manifest <- rbind(manifest, .export_metadata_tables(
     raw_matrix_object, output, "original",

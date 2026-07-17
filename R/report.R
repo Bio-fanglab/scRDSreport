@@ -1,3 +1,136 @@
+.embedded_download_indices <- function(manifest, output) {
+  files <- as.data.frame(manifest$files %||% data.frame(), stringsAsFactors = FALSE)
+  if (!nrow(files) || !"path" %in% names(files)) return(integer())
+  mode <- as.character(manifest$download_embedding$mode %||% "never")[[1L]]
+  if (identical(mode, "never")) return(integer())
+  paths <- file.path(output, as.character(files$path))
+  sizes <- if ("bytes" %in% names(files)) suppressWarnings(as.numeric(files$bytes)) else rep(NA_real_, nrow(files))
+  missing <- is.na(sizes) & file.exists(paths)
+  sizes[missing] <- as.numeric(file.info(paths[missing])$size)
+  existing <- which(file.exists(paths) & !is.na(sizes))
+  if (!length(existing)) return(integer())
+  if (identical(mode, "always")) return(existing)
+  budget <- suppressWarnings(as.numeric(manifest$download_embedding$max_bytes %||% 0))[[1L]]
+  if (!is.finite(budget) || budget <= 0) return(integer())
+  section <- if ("section" %in% names(files)) as.character(files$section) else rep("", nrow(files))
+  section_priority <- c(
+    paste0("module_", c(
+      "qc", "reduction", "cluster", "celltype", "differential", "enrichment",
+      "pseudotime", "communication", "cell_cycle", "tf", "cnv", "downloads"
+    )),
+    "annotation_original", "metadata_original", "annotation_analysis", "metadata_analysis",
+    "design", "matrix_preview", "analysis_result", "embedding", "inventory", "features",
+    "provenance", "expression_matrix", "rds"
+  )
+  priority <- match(section, section_priority, nomatch = length(section_priority) + 1L)
+  artifact_priority <- if ("embed_priority" %in% names(files)) {
+    suppressWarnings(as.numeric(files$embed_priority))
+  } else {
+    rep(100, nrow(files))
+  }
+  artifact_priority[is.na(artifact_priority)] <- 100
+  candidates <- existing[order(priority[existing], artifact_priority[existing], sizes[existing])]
+  selected <- integer()
+  used <- 0
+  for (index in candidates) {
+    if (sizes[[index]] <= budget - used) {
+      selected <- c(selected, index)
+      used <- used + sizes[[index]]
+    }
+  }
+  selected
+}
+
+.write_embedded_download_payload <- function(connection, files, paths, indices,
+                                             chunk_bytes = 3L * 1024L * 1024L) {
+  for (index in indices) {
+    input <- file(paths[[index]], open = "rb")
+    tryCatch({
+      part <- 0L
+      repeat {
+        chunk <- readBin(input, what = "raw", n = chunk_bytes)
+        if (!length(chunk)) break
+        part <- part + 1L
+        filename <- htmltools::htmlEscape(basename(as.character(files$path[[index]])), attribute = TRUE)
+        tag <- paste0(
+          "<script type=\"application/octet-stream\" data-scrds-file=\"scrds-embedded-", index,
+          "\" data-part=\"", part, "\" data-filename=\"", filename, "\">",
+          jsonlite::base64_enc(chunk), "</script>\n"
+        )
+        writeBin(charToRaw(enc2utf8(tag)), connection)
+      }
+    }, finally = close(input))
+  }
+  invisible(NULL)
+}
+
+.raw_fixed_match <- function(haystack, needle) {
+  if (!length(needle) || length(haystack) < length(needle)) return(NA_integer_)
+  candidates <- which(haystack == needle[[1L]])
+  candidates <- candidates[candidates <= length(haystack) - length(needle) + 1L]
+  for (candidate in candidates) {
+    extent <- candidate + seq_along(needle) - 1L
+    if (identical(haystack[extent], needle)) return(candidate)
+  }
+  NA_integer_
+}
+
+.inject_embedded_downloads <- function(report_path, manifest_path, output, verbose = TRUE) {
+  manifest <- readRDS(manifest_path)
+  indices <- .embedded_download_indices(manifest, output)
+  if (!length(indices)) return(report_path)
+  files <- as.data.frame(manifest$files, stringsAsFactors = FALSE)
+  paths <- file.path(output, as.character(files$path))
+  temporary <- tempfile(pattern = "report-with-downloads-", tmpdir = dirname(report_path), fileext = ".html")
+  on.exit(unlink(temporary), add = TRUE)
+  source <- file(report_path, open = "rb")
+  target <- file(temporary, open = "wb")
+  on.exit(try(close(source), silent = TRUE), add = TRUE)
+  on.exit(try(close(target), silent = TRUE), add = TRUE)
+  needle <- charToRaw("</body>")
+  carry <- raw()
+  injected <- FALSE
+  repeat {
+    chunk <- readBin(source, what = "raw", n = 1024L * 1024L)
+    if (!length(chunk)) break
+    buffer <- c(carry, chunk)
+    if (injected) {
+      writeBin(buffer, target)
+      carry <- raw()
+      next
+    }
+    hit <- .raw_fixed_match(buffer, needle)
+    if (!is.na(hit)) {
+      if (hit > 1L) writeBin(buffer[seq_len(hit - 1L)], target)
+      .write_embedded_download_payload(target, files, paths, indices)
+      writeBin(buffer[seq.int(hit, length(buffer))], target)
+      carry <- raw()
+      injected <- TRUE
+      next
+    }
+    keep <- min(length(needle) - 1L, length(buffer))
+    flush <- length(buffer) - keep
+    if (flush > 0L) writeBin(buffer[seq_len(flush)], target)
+    carry <- if (keep > 0L) buffer[seq.int(flush + 1L, length(buffer))] else raw()
+  }
+  if (!injected) {
+    if (length(carry)) writeBin(carry, target)
+    .write_embedded_download_payload(target, files, paths, indices)
+  }
+  close(source)
+  close(target)
+  if (!file.copy(temporary, report_path, overwrite = TRUE, copy.mode = TRUE)) {
+    .sc_stop("Could not inject embedded downloads into %s.", report_path)
+  }
+  .sc_message(
+    verbose, "Embedded %s downloadable files after Quarto rendering (%s).",
+    length(indices), format(
+      structure(sum(file.info(paths[indices])$size), class = "object_size"), units = "auto"
+    )
+  )
+  report_path
+}
+
 .render_quarto_report <- function(manifest_path, output, verbose = TRUE) {
   .require_optional("DT", "render tables with CSV and Excel download buttons")
   .require_optional("knitr", "render the Quarto report")
@@ -7,6 +140,11 @@
   file.copy(template, work_template, overwrite = TRUE)
   scss <- system.file("quarto", "report.scss", package = "scRDSreport")
   if (nzchar(scss)) file.copy(scss, file.path(output, ".report", "report.scss"), overwrite = TRUE)
+  render_directory <- dirname(work_template)
+  rendered_local <- file.path(render_directory, "report.html")
+  final_report <- file.path(output, "report.html")
+  old_working_directory <- setwd(render_directory)
+  on.exit(setwd(old_working_directory), add = TRUE)
 
   old_locale <- Sys.getlocale("LC_CTYPE")
   old_locale_env <- Sys.getenv(c("LC_ALL", "LANG"), unset = NA_character_)
@@ -28,14 +166,26 @@
   if (requireNamespace("quarto", quietly = TRUE)) {
     .sc_message(verbose, "Rendering Quarto HTML report...")
     quarto::quarto_render(
-      input = work_template,
+      input = basename(work_template),
       output_file = "report.html",
-      execute_params = list(manifest = normalizePath(manifest_path)),
-      quiet = !isTRUE(verbose),
-      quarto_args = c("--output-dir", output)
+      execute_params = list(
+        manifest = normalizePath(manifest_path),
+        defer_embedded_assets = TRUE
+      ),
+      quiet = !isTRUE(verbose)
     )
   } else {
     quarto_bin <- Sys.which("quarto")
+    if (!nzchar(quarto_bin)) {
+      conda_prefix <- Sys.getenv("CONDA_PREFIX", unset = "")
+      r_prefix <- normalizePath(file.path(R.home(), "..", ".."), mustWork = FALSE)
+      candidates <- unique(c(
+        if (nzchar(conda_prefix)) file.path(conda_prefix, "bin", "quarto") else character(),
+        file.path(r_prefix, "bin", "quarto")
+      ))
+      candidates <- candidates[file.exists(candidates)]
+      if (length(candidates)) quarto_bin <- candidates[[1L]]
+    }
     if (!nzchar(quarto_bin)) {
       .sc_stop("Quarto was not found. Data exports are complete; install Quarto and rerun with overwrite = TRUE, or call running(..., render = FALSE).")
     }
@@ -97,17 +247,40 @@
     }
     if (length(restore_env)) on.exit(Sys.unsetenv(restore_env), add = TRUE)
     params_path <- file.path(output, ".report", "params.yml")
-    writeLines(c("manifest:", paste0("  ", normalizePath(manifest_path))), params_path)
-    old_working_directory <- setwd(dirname(work_template))
-    on.exit(setwd(old_working_directory), add = TRUE)
+    writeLines(c(
+      "manifest:", paste0("  ", normalizePath(manifest_path)),
+      "defer_embedded_assets: true"
+    ), params_path)
     args <- c(
       "render", basename(work_template), "--output", "report.html",
-      "--output-dir", "..", "--execute-params", basename(params_path)
+      "--execute-params", basename(params_path)
     )
     status <- system2(quarto_bin, args = args)
     if (!identical(status, 0L)) .sc_stop("Quarto rendering failed with status %s.", status)
   }
-  file.path(output, "report.html")
+  if (!file.exists(rendered_local)) {
+    .sc_stop("Quarto reported success but did not create %s.", rendered_local)
+  }
+  .inject_embedded_downloads(rendered_local, manifest_path, output, verbose = verbose)
+  if (!file.copy(rendered_local, final_report, overwrite = TRUE, copy.mode = TRUE)) {
+    .sc_stop("Could not copy the rendered standalone report to %s.", final_report)
+  }
+  final_report
+}
+
+.subset_top_detected_features <- function(object, max_features) {
+  max_features <- min(as.integer(max_features), nrow(object))
+  if (max_features >= nrow(object)) return(object)
+  counts <- .layer_data(object, SeuratObject::DefaultAssay(object), "counts")
+  detected <- Matrix::rowSums(counts > 0)
+  keep <- order(detected, decreasing = TRUE)[seq_len(max_features)]
+  # SeuratObject 5 currently restores the assay's original feature order but
+  # can retain a reordered request for meta.features. Sort the selected row
+  # positions before subsetting so both data and metadata receive one order.
+  keep <- sort(keep)
+  features <- rownames(counts)[keep]
+  # Character identities avoid a separate integer-index feature metadata bug.
+  object[features, ]
 }
 
 #' Build a downloadable single-cell report from an RDS file
@@ -118,16 +291,20 @@
 #' @param sample_map Optional named sample-to-group vector or data frame with
 #'   `sample_id`, `group`, and optionally `replicate`.
 #' @param filter_raw_barcodes One of `"auto"`, `"always"`, or `"never"`.
-#'   Auto detects large unfiltered droplet matrices before SCP analysis.
-#' @param min_features,min_counts,max_features,max_counts Cell-level thresholds
-#'   used when raw barcode filtering is applied.
+#'   Auto applies the supplied QC thresholds before SCP for raw/partial
+#'   objects and preserves already analyzed objects.
+#' @param min_features,min_counts,max_features,max_counts,max_percent_mt
+#'   Cell-level thresholds used by raw-barcode prefiltering and the full QC
+#'   module. Mitochondrial percentage is calculated after the inexpensive
+#'   count/feature prefilter so multi-million-droplet objects stay tractable.
 #' @param filter_low_expression_features One of `"auto"`, `"always"`, or
 #'   `"never"`. Auto removes features detected in too few cells from large raw
 #'   objects before SCP analysis; existing analyzed objects are never changed.
 #' @param min_cells_per_feature Minimum cells in which a retained feature must
 #'   have a non-zero count.
 #' @param analyze One of `"auto"`, `"always"`, or `"never"`. Auto runs SCP
-#'   unless both a dimensional reduction and a cluster/annotation column exist.
+#'   unless both a dimensional reduction and a cluster/annotation column exist;
+#'   without an explicit `config`, analyzed inputs switch to report-only export.
 #' @param integration_method SCP integration method, or `"none"` (default).
 #'   Automatic integration is deliberately disabled because sample and batch
 #'   are not necessarily equivalent.
@@ -140,9 +317,13 @@
 #'   When omitted, common annotation column names are detected automatically.
 #'   The package never invents or overwrites cell-type annotations.
 #' @param species `"auto"` or one non-empty species name, such as `"human"`,
-#'   `"mouse"`, `"rat"`, or `"zebrafish"`. This records provenance only; it
-#'   does not force a species-specific annotation workflow. Auto uses stable
-#'   feature-ID prefixes before gene symbols.
+#'   `"mouse"`, `"rat"`, or `"zebrafish"`. Auto uses stable feature-ID
+#'   prefixes before gene symbols. Species-specific modules run only when a
+#'   matching resource profile is available.
+#' @param config A configuration created by \code{\link{report_config}()}. When omitted,
+#'   raw/partial objects use the full profile and analyzed objects use the
+#'   report-only profile. Explicit full profiles can add advanced modules to an
+#'   existing analysis. Existing annotations are preserved by default.
 #' @param analysis_max_cells Maximum cells passed to SCP. `Inf` (default) keeps
 #'   all retained cells; a finite value creates a deterministic analysis subset
 #'   while the original RDS remains available for download.
@@ -151,33 +332,38 @@
 #' @param matrix_layers Expression layers to export in Matrix Market format.
 #' @param embed_downloads One of `"auto"`, `"always"`, or `"never"`.
 #'   Auto embeds downloadable files into the standalone HTML up to the total
-#'   `embed_max_mb` budget, prioritizing annotation and result tables. Always
+#'   `embed_max_mb` budget, prioritizing module results, annotation and compact
+#'   tables. Always
 #'   forces every exported file into the HTML and can create a very large file.
 #' @param embed_max_mb Total megabytes available to automatic HTML download
 #'   embedding. This limit is ignored when `embed_downloads = "always"`.
 #' @param render Whether to render the Quarto HTML report.
-#' @param overwrite Whether managed files in a non-empty output directory may
-#'   be replaced. Unrelated files are never deleted.
+#' @param overwrite Whether managed files in a recognized scRDSreport output
+#'   directory may be replaced. A non-empty unrecognized directory is refused
+#'   even when `TRUE`; unrelated files are never deleted. The input RDS must not
+#'   be stored under a managed subdirectory of the same output.
 #' @param seed Random seed used by SCP.
 #' @param verbose Print progress messages.
 #' @return Invisibly, a list containing paths, analysis status, design, and manifest.
 #' @export
 running <- function(input, output, sample_col = NULL, sample_map = NULL,
                     filter_raw_barcodes = c("auto", "always", "never"),
-                    min_features = 200L, min_counts = 0L,
-                    max_features = Inf, max_counts = Inf,
+                    min_features = 200L, min_counts = 500L,
+                    max_features = 7500L, max_counts = Inf,
+                    max_percent_mt = 20,
                     filter_low_expression_features = c("auto", "always", "never"),
                     min_cells_per_feature = 3L,
                     analyze = c("auto", "always", "never"),
                     integration_method = "none", scp_args = list(),
                     run_markers = TRUE, marker_args = list(),
-                    annotation_col = NULL, species = "auto",
+                    annotation_col = NULL, species = "auto", config = NULL,
                     analysis_max_cells = Inf,
                     analysis_max_features = Inf,
                     matrix_layers = c("counts", "data"),
                     embed_downloads = c("auto", "always", "never"),
                     embed_max_mb = 50, render = TRUE,
                     overwrite = FALSE, seed = 11L, verbose = TRUE) {
+  config_was_missing <- is.null(config)
   analyze <- match.arg(analyze)
   filter_raw_barcodes <- match.arg(filter_raw_barcodes)
   filter_low_expression_features <- match.arg(filter_low_expression_features)
@@ -200,8 +386,11 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
       !is.finite(embed_max_mb) || embed_max_mb <= 0) {
     .sc_stop("embed_max_mb must be one finite positive number.")
   }
-  thresholds <- list(min_features = min_features, min_counts = min_counts,
-                     max_features = max_features, max_counts = max_counts)
+  thresholds <- list(
+    min_features = min_features, min_counts = min_counts,
+    max_features = max_features, max_counts = max_counts,
+    max_percent_mt = max_percent_mt
+  )
   valid_threshold <- vapply(thresholds, function(x) {
     is.numeric(x) && length(x) == 1L && !is.na(x) && x >= 0
   }, logical(1))
@@ -210,6 +399,9 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
   }
   if (min_features > max_features || min_counts > max_counts) {
     .sc_stop("Minimum cell-filtering thresholds cannot exceed their maximum thresholds.")
+  }
+  if (is.finite(max_percent_mt) && max_percent_mt > 100) {
+    .sc_stop("max_percent_mt must be between 0 and 100.")
   }
   for (limit in list(analysis_max_cells = analysis_max_cells,
                      analysis_max_features = analysis_max_features)) {
@@ -224,8 +416,33 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
   if (length(species) != 1L || is.na(species) || !nzchar(trimws(species))) {
     .sc_stop("species must be 'auto' or one non-empty species name (for example human, mouse, rat, or zebrafish).")
   }
-  species <- tolower(trimws(species))
-  input <- normalizePath(input, mustWork = TRUE)
+  species <- .normalize_species_name(species)
+  if (is.null(config)) {
+    config <- report_config(
+      profile = if (identical(analyze, "never")) "report_only" else "full"
+    )
+  }
+  if (!is.list(config)) {
+    .sc_stop("config must be created by report_config().")
+  }
+  if (exists(".validate_report_config", mode = "function", inherits = TRUE)) {
+    config <- .validate_report_config(config)
+  }
+  if (is.infinite(analysis_max_cells) &&
+      is.finite(config$limits$analysis_max_cells %||% Inf)) {
+    analysis_max_cells <- config$limits$analysis_max_cells
+  }
+  if (is.infinite(analysis_max_features) &&
+      is.finite(config$limits$analysis_max_features %||% Inf)) {
+    analysis_max_features <- config$limits$analysis_max_features
+  }
+  if (identical(embed_max_mb, 50) &&
+      is.numeric(config$limits$embed_max_mb %||% NULL)) {
+    embed_max_mb <- config$limits$embed_max_mb
+  }
+  input <- normalizePath(input, mustWork = TRUE, winslash = "/")
+  output <- .normalize_output_path(output)
+  .assert_input_outside_managed_output(input, output)
   output <- .ensure_output(output, overwrite = overwrite)
   .sc_message(verbose, "Reading %s...", input)
   object <- .read_single_cell_rds(input)
@@ -254,20 +471,62 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
   detected_species <- .detect_species(rownames(raw_matrix_object))
 
   before <- .object_inventory(object)
+  status_before <- .analysis_status(before)
+  if (config_was_missing && identical(analyze, "auto") && identical(status_before, "analyzed")) {
+    config <- report_config(profile = "report_only")
+    .sc_message(verbose, "Input already contains reductions and annotations/clusters; exporting existing analysis without recomputation.")
+  }
+  effective_barcode_filter <- if (
+    (identical(config$profile, "report_only") || identical(analyze, "never")) &&
+      identical(filter_raw_barcodes, "auto")
+  ) {
+    "never"
+  } else if (identical(filter_raw_barcodes, "auto") && !identical(status_before, "analyzed")) {
+    # Raw and partial objects must be quality filtered before SCP so reductions,
+    # markers and the final object all use the same cell population.
+    "always"
+  } else {
+    filter_raw_barcodes
+  }
   filtering <- .prefilter_raw_barcodes(
     object,
-    mode = filter_raw_barcodes,
+    mode = effective_barcode_filter,
     min_features = min_features,
     min_counts = min_counts,
     max_features = max_features,
     max_counts = max_counts,
+    max_percent_mt = max_percent_mt,
     verbose = verbose
   )
   object <- filtering$object
   inferred <- infer_sample_design(object, sample_col = sample_col, sample_map = sample_map)
   object <- .attach_design(object, inferred)
-  status_before <- .analysis_status(before)
-  should_analyze <- identical(analyze, "always") || (identical(analyze, "auto") && status_before != "analyzed")
+  should_analyze <- !identical(config$profile, "report_only") &&
+    (identical(analyze, "always") ||
+       (identical(analyze, "auto") && status_before != "analyzed"))
+  config$qc <- utils::modifyList(
+    list(
+      filter = should_analyze && !isTRUE(filtering$summary$applied),
+      min_features = min_features,
+      min_counts = min_counts,
+      max_features = max_features,
+      max_counts = max_counts,
+      max_percent_mt = max_percent_mt,
+      max_plot_cells = config$limits$plot_max_cells %||% 50000L
+    ),
+    config$qc %||% list(),
+    keep.null = TRUE
+  )
+  config$celltype <- utils::modifyList(
+    list(
+      mode = config$annotation$mode %||% "preserve",
+      annotation_column = primary_annotation,
+      manual_markers = config$resource_overrides$manual_markers %||% NULL,
+      max_plot_cells = config$limits$plot_max_cells %||% 50000L
+    ),
+    config$celltype %||% list(),
+    keep.null = TRUE
+  )
   feature_filtering <- .prefilter_low_expression_features(
     object,
     mode = filter_low_expression_features,
@@ -292,10 +551,7 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
                          features_before = nrow(object), features_after = nrow(object))
   if (is.finite(analysis_max_features) && analysis_max_features >= 10L &&
       nrow(object) > as.integer(analysis_max_features) && should_analyze) {
-    counts <- .layer_data(object, SeuratObject::DefaultAssay(object), "counts")
-    detected <- Matrix::rowSums(counts > 0)
-    keep <- order(detected, decreasing = TRUE)[seq_len(as.integer(analysis_max_features))]
-    object <- object[keep, ]
+    object <- .subset_top_detected_features(object, analysis_max_features)
     feature_subset$applied <- TRUE
     feature_subset$features_after <- nrow(object)
     .sc_message(verbose, "Feature subset: SCP will use %s of %s retained features.",
@@ -318,7 +574,86 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
   } else {
     .sc_message(verbose, "Preserving existing analysis (status: %s).", status_before)
   }
+  configured_species <- config$resource_overrides$species %||% NULL
+  species_status <- .species_selection_status(
+    requested = species,
+    detected = detected_species,
+    configured = configured_species
+  )
+  selected_species <- species_status$selected
+  resource_status <- .resolve_species_resources(config, selected_species)
+  full_analysis <- tryCatch(
+    .run_full_analysis(
+      object = object,
+      output = output,
+      design = inferred,
+      species_info = species_status,
+      config = config,
+      seed = as.integer(seed),
+      verbose = verbose
+    ),
+    error = function(e) {
+      warning(
+        sprintf("The full analysis layer could not be initialized: %s", conditionMessage(e)),
+        call. = FALSE
+      )
+      plan <- .build_analysis_plan(
+        config,
+        context = list(
+          species = selected_species,
+          has_annotation = length(original_annotation_columns) > 0L,
+          has_clusters = length(.cluster_columns(.seurat_metadata(object))) > 0L,
+          n_samples = nrow(inferred$design),
+          n_cells = ncol(object)
+        ),
+        resources = resource_status
+      )
+      for (id in names(plan$modules)) {
+        if (isTRUE(plan$modules[[id]]$requested) && !identical(id, "downloads")) {
+          plan$modules[[id]]$status <- "failed"
+          plan$modules[[id]]$reason <- "full_analysis_initialization_error"
+          plan$modules[[id]]$message <- conditionMessage(e)
+          plan$modules[[id]]$error <- conditionMessage(e)
+        }
+      }
+      list(
+        object = object,
+        modules = plan$modules,
+        artifacts = list(),
+        warnings = conditionMessage(e),
+        species = selected_species,
+        schema_version = "2.0"
+      )
+    }
+  )
+  object <- full_analysis$object
+  artifact_id_map <- stats::setNames(
+    vapply(full_analysis$artifacts, function(x) as.character(x$path %||% ""), character(1)),
+    vapply(full_analysis$artifacts, function(x) as.character(x$artifact_id %||% x$id %||% ""), character(1))
+  )
+  for (id in names(full_analysis$modules)) {
+    module <- full_analysis$modules[[id]]
+    if (is.null(module$reason)) module$reason <- module$reason_code %||% ""
+    if (is.null(module$summary)) module$summary <- module$details %||% list()
+    artifact_ids <- module$artifact_ids %||% character()
+    artifact_paths <- unname(artifact_id_map[artifact_ids])
+    module$artifacts <- unique(c(artifact_ids, artifact_paths[!is.na(artifact_paths) & nzchar(artifact_paths)]))
+    full_analysis$modules[[id]] <- module
+  }
   meta_after <- .seurat_metadata(object)
+  sample_design_report <- inferred$design
+  if ("n_cells" %in% names(sample_design_report)) {
+    names(sample_design_report)[names(sample_design_report) == "n_cells"] <- "n_cells_post_qc"
+  }
+  analysis_sample_counts <- if (".scRDSreport_sample" %in% names(meta_after)) {
+    table(as.character(meta_after$.scRDSreport_sample))
+  } else {
+    integer()
+  }
+  sample_design_report$n_cells_analysis <- as.integer(
+    analysis_sample_counts[as.character(sample_design_report$sample_id)]
+  )
+  sample_design_report$n_cells_analysis[is.na(sample_design_report$n_cells_analysis)] <- 0L
   analysis_annotation_columns <- unique(c(
     original_annotation_columns[original_annotation_columns %in% names(meta_after)],
     .annotation_columns(meta_after)
@@ -327,26 +662,65 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
     !is.na(analysis_annotation_columns) & nzchar(analysis_annotation_columns)
   ]
   annotation_status$analysis_columns <- analysis_annotation_columns
-  selected_species <- if (identical(species, "auto")) detected_species$species else species
-  species_status <- list(
-    requested = species,
-    detected = detected_species$species,
-    selected = selected_species,
-    confidence = detected_species$confidence,
-    basis = detected_species$basis
-  )
+  if (!identical(config$annotation$mode, "preserve")) {
+    generated <- setdiff(analysis_annotation_columns, original_annotation_columns)
+    annotation_status$generated_columns <- generated
+    annotation_status$source <- if (length(generated)) {
+      paste0("explicit_", config$annotation$mode)
+    } else {
+      annotation_status$source
+    }
+  }
   after <- .object_inventory(object)
 
   manifest_files <- .export_object(
     object = object, input = input, output = output,
-    sample_design = inferred$design, raw_matrix_object = raw_matrix_object,
+    sample_design = sample_design_report, raw_matrix_object = raw_matrix_object,
     matrix_object = object,
     original_annotation_columns = original_annotation_columns,
     analysis_annotation_columns = analysis_annotation_columns,
     matrix_layers = matrix_layers, verbose = verbose
   )
+  analysis_files <- .artifacts_to_manifest_rows(full_analysis$artifacts, output)
+  manifest_files <- .bind_rows_fill(manifest_files, analysis_files)
+  dependency_names <- c(
+    "scRDSreport", "SCP", "Seurat", "SeuratObject", "Matrix", "DT",
+    "SingleR", "celldex", "edgeR", "clusterProfiler", "GSVA",
+    "monocle3", "SeuratWrappers", "CellChat", "infercnv",
+    "ComplexHeatmap", "plotly", "quarto"
+  )
+  dependency_table <- data.frame(
+    package = dependency_names,
+    installed = vapply(dependency_names, requireNamespace, logical(1), quietly = TRUE),
+    version = vapply(dependency_names, function(package) {
+      if (!requireNamespace(package, quietly = TRUE)) return(NA_character_)
+      as.character(utils::packageVersion(package))
+    }, character(1)),
+    stringsAsFactors = FALSE
+  )
+  package_version <- dependency_table$version[dependency_table$package == "scRDSreport"]
+  if (is.na(package_version) || !length(package_version)) package_version <- "0.2.0"
+  created_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z")
+  input_sha256 <- .sha256_file(input)
+  hash_token <- if (length(input_sha256) && !is.na(input_sha256) && nzchar(input_sha256)) {
+    substr(input_sha256, 1L, 12L)
+  } else {
+    "nohash"
+  }
   manifest <- list(
-    created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z"),
+    manifest_schema_version = "2.0",
+    run_id = paste0(format(Sys.time(), "%Y%m%dT%H%M%S"), "-", hash_token),
+    package_version = package_version,
+    pipeline_version = "2.0",
+    input_sha256 = input_sha256,
+    author = list(name = "Anbuengsi", email = "an.bunengsi@qq.com"),
+    config = .fa_sanitize_config(config),
+    species_resources = .fa_sanitize_config(resource_status),
+    dependencies = dependency_table,
+    modules = full_analysis$modules,
+    artifacts = full_analysis$artifacts,
+    warnings = unique(full_analysis$warnings %||% character()),
+    created_at = created_at,
     input = input,
     output = output,
     sample_source = inferred$source,
@@ -367,7 +741,7 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
     analysis_feature_subset = feature_subset,
     inventory_before = before,
     inventory_after = after,
-    sample_design = inferred$design,
+    sample_design = sample_design_report,
     files = manifest_files,
     session_info = utils::capture.output(utils::sessionInfo())
   )
@@ -384,6 +758,9 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
     manifest = manifest_path,
     status_before = status_before,
     status_after = .analysis_status(after),
-    sample_design = inferred$design
+    sample_design = sample_design_report,
+    modules = full_analysis$modules,
+    artifacts = full_analysis$artifacts,
+    config = config
   ))
 }

@@ -2,7 +2,9 @@
 
 export(infer_sample_design)
 export(inspect_rds)
+export(report_config)
 export(running)
+export(species_resources)
 importFrom(DT,datatable)
 importFrom(ggplot2,ggplot)
 importFrom(ggsci,pal_aaas)
