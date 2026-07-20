@@ -94,11 +94,15 @@
     )
     rows <- rbind(rows, .write_table(
       annotations, annotation_path, paste0("annotation_", prefix),
-      paste(tools::toTitleCase(prefix), "RDS cell annotations"), output,
-      note = paste0(
-        "One row per ", prefix,
-        " object cell; annotation values are preserved from the input RDS."
-      )
+      paste(tools::toTitleCase(prefix), "cell annotations"), output,
+      note = if (identical(prefix, "original")) {
+        "One row per original RDS cell; annotation values are preserved from the input RDS."
+      } else {
+        paste0(
+          "One row per analysis object cell; columns may contain preserved input annotations ",
+          "and explicitly generated reference/manual annotations. See the annotation source in manifest."
+        )
+      }
     ))
   }
   rows

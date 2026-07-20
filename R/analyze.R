@@ -263,35 +263,52 @@
 }
 
 .detect_species <- function(features) {
-  features <- sub("[.][0-9]+$", "", as.character(features))
-  prefixes <- c(
-    mouse = "^ENSMUSG", rat = "^ENSRNOG", zebrafish = "^ENSDARG",
-    pig = "^ENSSSCG", cattle = "^ENSBTAG", chicken = "^ENSGALG",
-    macaque = "^ENSMMUG", dog = "^ENSCAFG"
-  )
-  fractions <- vapply(prefixes, function(pattern) mean(grepl(pattern, features, ignore.case = TRUE)), numeric(1))
-  if (length(fractions) && max(fractions) >= 0.2) {
-    detected <- names(which.max(fractions))
-    return(list(
-      species = detected, confidence = "high",
-      basis = paste0(sub("^\\^", "", prefixes[[detected]]), " feature IDs")
-    ))
-  }
-  human_ensembl <- mean(grepl("^ENSG[0-9]", features, ignore.case = TRUE))
-  if (human_ensembl >= 0.2) return(list(species = "human", confidence = "high", basis = "ENSG feature IDs"))
-  if (mean(grepl("^FBgn[0-9]", features, ignore.case = TRUE)) >= 0.2) {
-    return(list(species = "drosophila", confidence = "high", basis = "FBgn feature IDs"))
-  }
-  if (mean(grepl("^WBGene[0-9]", features, ignore.case = TRUE)) >= 0.2) {
-    return(list(species = "c_elegans", confidence = "high", basis = "WBGene feature IDs"))
+  features <- as.character(features)
+  features <- features[!is.na(features) & nzchar(features)]
+  features <- sub("[.][0-9]+$", "", features)
+  if (!length(features)) {
+    return(list(species = "unknown", confidence = "low", basis = "no feature IDs"))
   }
 
+  registry <- .common_species_registry()
+  prefixes <- vapply(registry, `[[`, character(1), "ensembl_prefix")
+  prefixes <- c(
+    prefixes,
+    drosophila = "^FBgn[0-9]",
+    c_elegans = "^WBGene[0-9]"
+  )
+  fractions <- vapply(
+    prefixes,
+    function(pattern) mean(grepl(pattern, features, ignore.case = TRUE)),
+    numeric(1)
+  )
+  matched <- names(fractions)[is.finite(fractions) & fractions >= 0.2]
+  if (length(matched) > 1L) {
+    labels <- sub("\\[0-9\\].*$", "", prefixes[matched])
+    labels <- sub("^\\^", "", labels)
+    return(list(
+      species = "unknown", confidence = "low",
+      basis = paste0("mixed or ambiguous feature-ID prefixes: ", paste(labels, collapse = ", "))
+    ))
+  }
+  if (length(matched) == 1L) {
+    detected <- matched[[1L]]
+    label <- sub("\\[0-9\\].*$", "", prefixes[[detected]])
+    label <- sub("^\\^", "", label)
+    return(list(
+      species = detected, confidence = "high",
+      basis = paste0(label, " feature IDs")
+    ))
+  }
   symbols <- features[grepl("^[A-Za-z][A-Za-z0-9._-]*$", features)]
   if (!length(symbols)) return(list(species = "unknown", confidence = "low", basis = "unrecognized feature IDs"))
   human_like <- mean(symbols == toupper(symbols) & grepl("[A-Z]", symbols))
   title_case_like <- mean(grepl("^[A-Z][a-z]", symbols))
   if (human_like >= 0.8 && human_like > title_case_like * 2) {
-    return(list(species = "human", confidence = "medium", basis = "gene-symbol capitalization"))
+    return(list(
+      species = "unknown", confidence = "low",
+      basis = "uppercase gene symbols cannot distinguish human, pig, cattle, dog, chicken, macaque, and other species"
+    ))
   }
   if (title_case_like >= 0.5 && title_case_like > human_like * 2) {
     return(list(species = "unknown", confidence = "low", basis = "title-case symbols cannot distinguish mouse, rat, and other species"))

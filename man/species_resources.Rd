@@ -2,7 +2,7 @@
 % Please edit documentation in R/species-resources.R
 \name{species_resources}
 \alias{species_resources}
-\title{Resolve organism-specific resources without implicit mouse fallback}
+\title{Resolve organism-specific resources without cross-species fallback}
 \usage{
 species_resources(species = "auto", overrides = list())
 }
@@ -16,8 +16,11 @@ species_resources(species = "auto", overrides = list())
 A list of species resources with class `scRDSreport_species_resources`.
 }
 \description{
-Built-in mappings are provided for human and mouse. `"auto"`, `"unknown"`,
-and unregistered species return an unsupported resource object containing no
-mouse database, marker, chromosome, or genome fallback. Other species can be
-enabled only through explicit `overrides`.
+Built-in mappings are provided for common human, mouse, rat, zebrafish,
+pig, cattle, chicken, dog, and macaque datasets. Only human and mouse have
+built-in CellChat and TxDb resources. Other profiles deliberately leave
+those fields empty instead of borrowing a database or genome build from a
+different species. `"auto"`, `"unknown"`, and unregistered species return
+an unsupported resource object unless matching resources are supplied
+explicitly through `overrides`.
 }

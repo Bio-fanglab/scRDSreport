@@ -56,12 +56,35 @@ utils::globalVariables(c(
   overrides <- config$resource_overrides %||% list()
   resource_fields <- switch(
     id,
-    celltype = c("manual_markers", "auto_annotation_reference"),
-    enrichment = c("orgdb", "kegg_code", "gene_sets", "gmt", "gmt_files"),
-    communication = c("cellchat_db"),
-    cell_cycle = c("s_genes", "g2m_genes", "cell_cycle_genes"),
-    tf = c("tf_genes", "tf_catalog"),
-    cnv = c("gene_order", "gtf", "txdb", "orgdb"),
+    qc = c(
+      "orgdb", "feature_keytype", "symbol_column", "mitochondrial_pattern",
+      "ribosomal_pattern", "hemoglobin_pattern", "pattern_ignore_case"
+    ),
+    celltype = c(
+      "manual_markers", "auto_annotation_reference", "orgdb",
+      "feature_keytype", "symbol_column"
+    ),
+    enrichment = c(
+      "orgdb", "feature_keytype", "symbol_column", "kegg_code",
+      "gene_sets", "gmt", "gmt_files", "scientific_name",
+      "msigdbr_species", "msigdbr_db_species", "msigdbr_default_collection",
+      "msigdbr_ortholog_projection", "gene_sets_strategy"
+    ),
+    communication = c(
+      "cellchat_db", "orgdb", "feature_keytype", "symbol_column"
+    ),
+    cell_cycle = c(
+      "s_genes", "g2m_genes", "cell_cycle_genes", "cell_cycle_strategy",
+      "scientific_name", "orgdb", "feature_keytype", "symbol_column"
+    ),
+    tf = c(
+      "tf_genes", "tf_catalog", "tf_catalog_strategy", "scientific_name",
+      "orgdb", "feature_keytype", "symbol_column"
+    ),
+    cnv = c(
+      "gene_order", "gtf", "txdb", "orgdb", "feature_keytype",
+      "symbol_column"
+    ),
     character()
   )
   for (field in resource_fields) {
@@ -161,11 +184,26 @@ utils::globalVariables(c(
   public <- species_resources(species)
   base <- list(
     orgdb = public$orgdb,
+    feature_keytype = public$feature_keytype,
+    symbol_column = public$symbol_column,
     kegg = public$kegg_code,
     cellchat = public$cellchat_db,
     txdb = public$txdb,
     gtf = public$gtf,
-    gene_sets = public$gene_sets
+    gene_sets = public$gene_sets,
+    gene_sets_strategy = public$gene_sets_strategy,
+    msigdbr_species = public$msigdbr_species,
+    msigdbr_db_species = public$msigdbr_db_species,
+    msigdbr_default_collection = public$msigdbr_default_collection,
+    scientific_name = public$scientific_name,
+    taxonomy_id = public$taxonomy_id,
+    auto_annotation_reference = public$auto_annotation_reference,
+    cell_cycle_strategy = public$cell_cycle_strategy,
+    tf_catalog_strategy = public$tf_catalog_strategy,
+    mitochondrial_pattern = public$mitochondrial_pattern,
+    ribosomal_pattern = public$ribosomal_pattern,
+    hemoglobin_pattern = public$hemoglobin_pattern,
+    pattern_ignore_case = public$pattern_ignore_case
   )
   supplied <- config$species_resources %||% list()
   if (is.list(supplied[[species]])) supplied <- supplied[[species]]
@@ -176,13 +214,48 @@ utils::globalVariables(c(
   base <- .fa_merge_list(base, supplied)
   direct <- list(
     orgdb = config$orgdb,
+    feature_keytype = config$feature_keytype,
+    symbol_column = config$symbol_column,
     kegg = config$kegg %||% config$kegg_code,
     cellchat = config$cellchat %||% config$cellchat_db,
     txdb = config$txdb,
     gtf = config$gtf,
-    gene_sets = config$gene_sets
+    gene_sets = config$gene_sets,
+    gene_sets_strategy = config$gene_sets_strategy,
+    scientific_name = config$scientific_name,
+    taxonomy_id = config$taxonomy_id,
+    msigdbr_species = config$msigdbr_species,
+    msigdbr_db_species = config$msigdbr_db_species,
+    msigdbr_default_collection = config$msigdbr_default_collection,
+    msigdbr_ortholog_projection = config$msigdbr_ortholog_projection,
+    auto_annotation_reference = config$auto_annotation_reference,
+    cell_cycle_strategy = config$cell_cycle_strategy,
+    tf_catalog_strategy = config$tf_catalog_strategy,
+    mitochondrial_pattern = config$mitochondrial_pattern,
+    ribosomal_pattern = config$ribosomal_pattern,
+    hemoglobin_pattern = config$hemoglobin_pattern,
+    pattern_ignore_case = config$pattern_ignore_case
   )
-  .fa_merge_list(base, direct[!vapply(direct, is.null, logical(1))])
+  output <- .fa_merge_list(base, direct[!vapply(direct, is.null, logical(1))])
+  if (!is.null(output$msigdbr_db_species) &&
+      is.null(config$msigdbr_ortholog_projection)) {
+    database <- toupper(as.character(output$msigdbr_db_species[[1L]]))
+    if (is.null(config$msigdbr_default_collection)) {
+      output$msigdbr_default_collection <- if (identical(database, "MM")) "MH" else "H"
+    }
+    output$msigdbr_ortholog_projection <- !(
+      (identical(species, "human") && identical(database, "HS")) ||
+        (identical(species, "mouse") && identical(database, "MM"))
+    )
+    if (is.null(config$gene_sets_strategy)) {
+      target <- output$scientific_name %||% species
+      output$gene_sets_strategy <- paste0(
+        "msigdbr_", tolower(database), "_to_",
+        gsub("[^a-z0-9]+", "_", tolower(target))
+      )
+    }
+  }
+  output
 }
 
 .fa_feature_symbols <- function(object, assay = NULL) {
@@ -220,7 +293,13 @@ utils::globalVariables(c(
   if (!is.null(explicit) && explicit %in% names(meta)) return(explicit)
   misc <- .slot_or_null(object, "misc") %||% list()
   active <- misc$scRDSreport_full_analysis$active_annotation_column %||% NULL
-  if (!is.null(active) && length(active) == 1L && active %in% names(meta)) return(active)
+  if (!is.null(active) && length(active) == 1L && active %in% names(meta)) {
+    active_values <- as.character(meta[[active]])
+    active_levels <- unique(active_values[!is.na(active_values) & nzchar(active_values)])
+    if (length(active_levels) >= 1L && length(active_levels) <= max(200L, ceiling(nrow(meta) * 0.5))) {
+      return(active)
+    }
+  }
   generated <- names(meta)[grepl("^\\.scRDSreport_celltype_", names(meta), ignore.case = TRUE)]
   generated <- generated[vapply(generated, function(name) {
     values <- as.character(meta[[name]])
@@ -583,10 +662,20 @@ utils::globalVariables(c(
                       "QC requires a counts layer; no counts layer was found."))
   }
   symbols <- .fa_feature_symbols(object, assay)
-  symbol_values <- unname(symbols[rownames(counts)])
-  mt_features <- rownames(counts)[grepl("^MT-", symbol_values, ignore.case = TRUE)]
-  ribo_features <- rownames(counts)[grepl("^RP[SL][0-9A-Z-]*$", symbol_values, ignore.case = TRUE)]
-  hb_features <- rownames(counts)[grepl("^HB[ABDEGMQZ][0-9A-Z-]*$", symbol_values, ignore.case = TRUE)]
+  orgdb <- .fa_orgdb(list(orgdb = cfg$orgdb), cfg)
+  mapping <- .fa_feature_mapping(
+    rownames(counts), symbols, orgdb,
+    preferred_keytype = cfg$feature_keytype,
+    symbol_column = cfg$symbol_column %||% "SYMBOL"
+  )
+  symbol_values <- as.character(mapping$SYMBOL[match(rownames(counts), mapping$feature)])
+  ignore_case <- isTRUE(cfg$pattern_ignore_case %||% TRUE)
+  mt_pattern <- cfg$mitochondrial_pattern %||% "^MT-"
+  ribo_pattern <- cfg$ribosomal_pattern %||% "^RP[SL]"
+  hb_pattern <- cfg$hemoglobin_pattern %||% "^HB[ABDEGMQZ]"
+  mt_features <- rownames(counts)[grepl(mt_pattern, symbol_values, ignore.case = ignore_case)]
+  ribo_features <- rownames(counts)[grepl(ribo_pattern, symbol_values, ignore.case = ignore_case)]
+  hb_features <- rownames(counts)[grepl(hb_pattern, symbol_values, ignore.case = ignore_case)]
   totals <- as.numeric(Matrix::colSums(counts))
   detected <- as.numeric(Matrix::colSums(counts != 0))
   percent_for <- function(features) {
@@ -657,7 +746,8 @@ utils::globalVariables(c(
   feature_set_table <- data.frame(
     feature_set = c("mitochondrial", "ribosomal", "hemoglobin"),
     matched_features = c(length(mt_features), length(ribo_features), length(hb_features)),
-    symbol_source = if (identical(unname(symbols), names(symbols))) "feature_id" else "feature_metadata",
+    symbol_source = if (!is.null(orgdb)) "species_orgdb_or_feature_metadata" else if (identical(unname(symbols), names(symbols))) "feature_id" else "feature_metadata",
+    matching_pattern = c(mt_pattern, ribo_pattern, hb_pattern),
     stringsAsFactors = FALSE
   )
   artifacts <- list(
@@ -936,13 +1026,15 @@ utils::globalVariables(c(
   if (is.character(reference) && length(reference) == 1L && grepl("::", reference, fixed = TRUE)) {
     fields <- strsplit(reference, "::", fixed = TRUE)[[1L]]
     loader <- if (length(fields) == 2L) .fa_pkg_fun(fields[[1L]], fields[[2L]]) else NULL
-    if (!is.null(loader)) return(tryCatch(loader(), error = function(e) NULL))
+    if (is.null(loader)) return(NULL)
+    return(tryCatch(loader(), error = function(e) NULL))
   }
   if (!is.null(reference) && !is.character(reference)) return(reference)
+  if (!is.null(reference)) return(NULL)
   if (isFALSE(cfg$allow_reference_download)) return(NULL)
   function_name <- switch(
     species,
-    mouse = "ImmGenData",
+    mouse = "MouseRNAseqData",
     human = "HumanPrimaryCellAtlasData",
     NULL
   )
@@ -1018,6 +1110,12 @@ utils::globalVariables(c(
                 message = paste0("Refusing to overwrite existing metadata column '", output_column, "'.")))
   }
   labels <- unname(as.character(mapping)[match(as.character(meta[[cluster_column]]), names(mapping))])
+  if (!any(!is.na(labels) & nzchar(labels))) {
+    return(list(
+      object = object, column = NULL, scores = marker_scores,
+      message = "The explicit manual mapping did not match any analyzed cluster; no all-missing annotation column was added."
+    ))
+  }
   annotation <- data.frame(labels, row.names = rownames(meta), check.names = FALSE)
   names(annotation) <- output_column
   object <- SeuratObject::AddMetaData(object, annotation)
@@ -1056,8 +1154,15 @@ utils::globalVariables(c(
     object <- normalize(object, assay = assay, verbose = FALSE)
     test <- .fa_matrix(object, "data", assay)
   }
-  symbols <- .fa_feature_symbols(object, assay)
-  symbols <- unname(symbols[rownames(test)])
+  symbols_from_object <- .fa_feature_symbols(object, assay)
+  resources <- .fa_species_resources(species, cfg)
+  orgdb <- .fa_orgdb(resources, cfg)
+  mapping <- .fa_feature_mapping(
+    rownames(test), symbols_from_object, orgdb,
+    preferred_keytype = cfg$feature_keytype %||% resources$feature_keytype,
+    symbol_column = cfg$symbol_column %||% resources$symbol_column %||% "SYMBOL"
+  )
+  symbols <- as.character(mapping$SYMBOL[match(rownames(test), mapping$feature)])
   valid <- !is.na(symbols) & nzchar(symbols) & !duplicated(toupper(symbols))
   test <- test[valid, , drop = FALSE]
   rownames(test) <- symbols[valid]
@@ -1072,32 +1177,72 @@ utils::globalVariables(c(
                 reason = "cluster_required_for_large_object",
                 message = "Cell-level SingleR was not run on a large object without clusters; supply a cluster column."))
   }
+  prediction_mode <- if (is.null(clusters)) "cell_level" else "cluster_level"
   predictions <- tryCatch(
     single_r(test = test, ref = reference, labels = labels, clusters = clusters),
     error = function(e) e
   )
+  if (inherits(predictions, "error") && !is.null(clusters) &&
+      grepl("scrapper", conditionMessage(predictions), ignore.case = TRUE) &&
+      ncol(test) <= as.integer(cfg$max_cell_level_cells %||% 50000L) &&
+      !isFALSE(cfg$allow_cell_level_fallback)) {
+    clusters <- NULL
+    prediction_mode <- "cell_level_fallback_missing_cluster_aggregation_dependency"
+    predictions <- tryCatch(
+      single_r(test = test, ref = reference, labels = labels, clusters = NULL),
+      error = function(e) e
+    )
+  }
   if (inherits(predictions, "error")) {
     return(list(object = object, column = NULL, predictions = NULL,
                 reason = "singler_failed", message = conditionMessage(predictions)))
   }
   prediction_table <- as.data.frame(predictions)
   prediction_table$prediction_id <- rownames(prediction_table)
-  selected <- if ("pruned.labels" %in% names(prediction_table)) {
+  use_pruned <- !isFALSE(cfg$use_pruned_labels)
+  selected <- if (use_pruned && "pruned.labels" %in% names(prediction_table)) {
     as.character(prediction_table$pruned.labels)
   } else if ("labels" %in% names(prediction_table)) {
     as.character(prediction_table$labels)
   } else {
     rep(NA_character_, nrow(prediction_table))
   }
-  selected[is.na(selected) | !nzchar(selected)] <- if ("labels" %in% names(prediction_table)) {
-    as.character(prediction_table$labels[is.na(selected) | !nzchar(selected)])
+  selected[is.na(selected) | !nzchar(selected)] <- NA_character_
+  prediction_table$selected_label <- selected
+  prediction_table$selected_label_source <- if (use_pruned && "pruned.labels" %in% names(prediction_table)) {
+    "pruned.labels"
   } else {
-    NA_character_
+    "labels"
   }
   if (!is.null(clusters)) {
     cell_labels <- selected[match(clusters, rownames(prediction_table))]
   } else {
     cell_labels <- selected[match(rownames(meta), rownames(prediction_table))]
+  }
+  reference_value <- cfg$reference %||% cfg$auto_annotation_reference
+  reference_label <- if (is.null(reference_value)) {
+    "registered celldex reference"
+  } else if (is.character(reference_value)) {
+    paste(reference_value, collapse = ", ")
+  } else {
+    paste0("<", paste(class(reference_value), collapse = "/"), " object>")
+  }
+  confident_cells <- sum(!is.na(cell_labels) & nzchar(cell_labels))
+  provenance <- list(
+    species = species,
+    reference = reference_label,
+    label_source = if (use_pruned && "pruned.labels" %in% names(prediction_table)) "pruned.labels" else "labels",
+    prediction_mode = prediction_mode,
+    confident_cells = confident_cells,
+    total_cells = length(cell_labels)
+  )
+  if (confident_cells == 0L) {
+    return(list(
+      object = object, column = NULL, predictions = prediction_table,
+      reason = "no_confident_labels",
+      message = "SingleR returned no confident labels after pruning; predictions were exported, but no all-missing annotation column was added.",
+      provenance = provenance
+    ))
   }
   output_column <- cfg$output_column %||% ".scRDSreport_celltype_SingleR"
   if (output_column %in% names(meta)) {
@@ -1111,19 +1256,31 @@ utils::globalVariables(c(
   list(
     object = object, column = output_column, predictions = prediction_table,
     reason = "singler_completed",
-    message = sprintf("SingleR added a new, explicitly requested annotation column for %s cells.", sum(!is.na(cell_labels)))
+    message = sprintf(
+      "SingleR added a new species-matched reference annotation column (%s): %s of %s cells received a confident label; pruned/uncertain labels remain missing.",
+      prediction_mode, confident_cells, length(cell_labels)
+    ),
+    provenance = provenance
   )
 }
 
 .fa_module_celltype <- function(object, output, cfg, seed, verbose, species) {
-  mode <- tolower(as.character(cfg$mode %||% "preserve"))
-  if (!mode %in% c("preserve", "manual", "auto")) mode <- "preserve"
+  requested_mode <- tolower(as.character(cfg$mode %||% "auto_if_missing"))
+  if (!requested_mode %in% c("auto_if_missing", "preserve", "manual", "auto")) {
+    requested_mode <- "auto_if_missing"
+  }
   original_annotation <- .fa_annotation_column(object, cfg)
+  mode <- if (identical(requested_mode, "auto_if_missing")) {
+    if (is.null(original_annotation)) "auto" else "preserve"
+  } else {
+    requested_mode
+  }
   cluster_column <- .fa_cluster_column(object, cfg)
   annotation_column <- original_annotation
   annotation_engine <- "RDS metadata"
   annotation_message <- "Existing annotations were preserved without modification."
   prediction_table <- NULL
+  annotation_provenance <- NULL
   annotation_issue <- NULL
   if (identical(mode, "manual")) {
     manual <- .fa_apply_manual_annotation(object, cfg, cluster_column)
@@ -1138,6 +1295,7 @@ utils::globalVariables(c(
     object <- automatic$object
     annotation_column <- automatic$column
     prediction_table <- automatic$predictions
+    annotation_provenance <- automatic$provenance %||% NULL
     annotation_engine <- "SingleR"
     annotation_message <- automatic$message
     if (is.null(annotation_column)) annotation_issue <- automatic$reason
@@ -1269,7 +1427,9 @@ utils::globalVariables(c(
     return(.fa_result(
       object, "needs_input", annotation_issue, annotation_message, annotation_engine,
       artifacts, list(mode = mode, original_annotation_column = original_annotation,
-                      annotation_column = annotation_column, cluster_column = cluster_column)
+                      requested_mode = requested_mode, annotation_column = annotation_column,
+                      cluster_column = cluster_column,
+                      annotation_provenance = annotation_provenance)
     ))
   }
   if (is.null(annotation_column)) {
@@ -1277,14 +1437,17 @@ utils::globalVariables(c(
       object, if (length(artifacts)) "partial" else "skipped", "annotation_missing",
       "No original cell annotation was present. Cluster composition may be shown, but no cell type was invented.",
       "RDS metadata", artifacts,
-      list(mode = mode, annotation_column = NULL, cluster_column = cluster_column)
+      list(mode = mode, requested_mode = requested_mode,
+           annotation_column = NULL, cluster_column = cluster_column)
     ))
   }
   .fa_result(
-    object, "completed", if (identical(mode, "preserve")) "annotation_preserved" else "annotation_explicitly_added",
+    object, "completed", if (identical(mode, "preserve")) "annotation_preserved" else "annotation_reference_added",
     annotation_message, annotation_engine, artifacts,
-    list(mode = mode, original_annotation_column = original_annotation,
-         annotation_column = annotation_column, cluster_column = cluster_column)
+    list(mode = mode, requested_mode = requested_mode,
+         original_annotation_column = original_annotation,
+         annotation_column = annotation_column, cluster_column = cluster_column,
+         annotation_provenance = annotation_provenance)
   )
 }
 
@@ -1774,7 +1937,7 @@ utils::globalVariables(c(
   unlist(sets, recursive = FALSE)
 }
 
-.fa_gene_sets <- function(cfg) {
+.fa_gene_sets <- function(cfg, species = NULL, resources = list()) {
   sets <- cfg[["gene_sets", exact = TRUE]] %||% list()
   if (!is.list(sets)) sets <- list()
   paths <- unique(unlist(c(
@@ -1787,8 +1950,86 @@ utils::globalVariables(c(
     paths <- character()
   }
   for (path in paths) sets <- c(sets, .fa_read_gmt(path))
+  has_user_sets <- length(sets) > 0L
+  source <- if (has_user_sets) "user_gene_sets_or_gmt" else "none"
+  auto_error <- NULL
+  auto_membership <- NULL
+  database_versions <- character()
+  db_species <- toupper(as.character(
+    cfg$msigdbr_db_species %||% resources$msigdbr_db_species %||%
+      if (identical(species, "mouse")) "MM" else "HS"
+  )[[1L]])
+  default_collection <- resources$msigdbr_default_collection %||%
+    if (identical(db_species, "MM")) "MH" else "H"
+  collections <- if (has_user_sets) {
+    unique(as.character(cfg$gene_set_collections %||% "user_supplied"))
+  } else {
+    unique(as.character(cfg$msigdb_collections %||% default_collection))
+  }
+  collections <- collections[!is.na(collections) & nzchar(collections)]
+  if (!length(sets) && !isFALSE(cfg$auto_gene_sets) && length(collections) &&
+      .fa_pkg_available("msigdbr")) {
+    loader <- .fa_pkg_fun("msigdbr", "msigdbr")
+    target_species <- cfg$msigdbr_species %||% resources$msigdbr_species %||%
+      resources$scientific_name %||% species
+    loaded <- lapply(collections, function(collection) {
+      tryCatch(
+        suppressMessages(loader(
+          db_species = db_species,
+          species = as.character(target_species)[[1L]],
+          collection = collection
+        )),
+        error = function(e) {
+          auto_error <<- paste0(collection, ": ", conditionMessage(e))
+          NULL
+        }
+      )
+    })
+    loaded <- Filter(function(x) !is.null(x) && nrow(x) &&
+                       all(c("gs_name", "gene_symbol") %in% names(x)), loaded)
+    if (length(loaded)) {
+      table <- do.call(rbind, loaded)
+      table <- table[!is.na(table$gs_name) & nzchar(table$gs_name) &
+                       !is.na(table$gene_symbol) & nzchar(table$gene_symbol), , drop = FALSE]
+      sets <- split(as.character(table$gene_symbol), as.character(table$gs_name))
+      sets <- lapply(sets, unique)
+      membership_columns <- intersect(
+        c(
+          "gs_name", "gene_symbol", "gs_collection", "gs_subcollection",
+          "db_version", "db_gene_symbol", "db_ensembl_gene",
+          "ortholog_sources", "num_ortholog_sources"
+        ),
+        names(table)
+      )
+      auto_membership <- unique(as.data.frame(table[membership_columns], stringsAsFactors = FALSE))
+      if ("db_version" %in% names(table)) {
+        database_versions <- unique(as.character(table$db_version[!is.na(table$db_version)]))
+      }
+      source <- "msigdbr"
+    }
+    attr(sets, "msigdbr_species") <- target_species
+    attr(sets, "msigdbr_db_species") <- db_species
+  }
   sets <- sets[vapply(sets, function(x) length(unique(x[!is.na(x) & nzchar(x)])) >= 2L, logical(1))]
-  lapply(sets, unique)
+  sets <- lapply(sets, unique)
+  attr(sets, "source") <- source
+  attr(sets, "collections") <- collections
+  attr(sets, "auto_error") <- auto_error
+  attr(sets, "membership") <- auto_membership
+  attr(sets, "database_versions") <- database_versions
+  attr(sets, "gmt_files") <- paths
+  if (is.null(attr(sets, "msigdbr_species"))) {
+    attr(sets, "msigdbr_species") <- cfg$gene_set_species %||%
+      resources$scientific_name %||% resources$msigdbr_species
+  }
+  if (is.null(attr(sets, "msigdbr_db_species"))) {
+    attr(sets, "msigdbr_db_species") <- if (has_user_sets) {
+      cfg$gene_set_database_species %||% NA_character_
+    } else {
+      cfg$msigdbr_db_species %||% resources$msigdbr_db_species
+    }
+  }
+  sets
 }
 
 .fa_orgdb <- function(resources, cfg) {
@@ -1801,7 +2042,9 @@ utils::globalVariables(c(
   object
 }
 
-.fa_feature_mapping <- function(features, feature_symbols, orgdb) {
+.fa_feature_mapping <- function(features, feature_symbols, orgdb,
+                                preferred_keytype = NULL,
+                                symbol_column = "SYMBOL") {
   base <- data.frame(
     feature = as.character(features),
     symbol_from_object = unname(feature_symbols[features]),
@@ -1812,31 +2055,83 @@ utils::globalVariables(c(
   if (is.null(orgdb) || !.fa_pkg_available("AnnotationDbi")) {
     base$SYMBOL <- base$symbol_from_object
     base$ENTREZID <- NA_character_
+    base$mapping_keytype <- NA_character_
     return(base)
   }
   keytypes_fun <- .fa_pkg_fun("AnnotationDbi", "keytypes")
+  columns_fun <- .fa_pkg_fun("AnnotationDbi", "columns")
   select_fun <- .fa_pkg_fun("AnnotationDbi", "select")
   available <- tryCatch(keytypes_fun(orgdb), error = function(e) character())
+  available_columns <- tryCatch(columns_fun(orgdb), error = function(e) available)
   cleaned <- sub("[.][0-9]+$", "", base$feature)
   ensembl_fraction <- mean(grepl("^ENS[A-Z]*G[0-9]+", cleaned, ignore.case = TRUE))
-  keytype <- if (ensembl_fraction >= 0.2 && "ENSEMBL" %in% available) "ENSEMBL" else "SYMBOL"
-  keys <- if (identical(keytype, "ENSEMBL")) cleaned else base$symbol_from_object
-  columns <- intersect(c("SYMBOL", "ENTREZID"), available)
-  mapped <- tryCatch(
-    suppressMessages(select_fun(orgdb, keys = unique(keys), keytype = keytype, columns = columns)),
-    error = function(e) NULL
-  )
-  if (is.null(mapped) || !nrow(mapped)) {
+  entrez_fraction <- mean(grepl("^[0-9]+$", cleaned))
+  heuristic <- if (ensembl_fraction >= 0.2) {
+    "ENSEMBL"
+  } else if (entrez_fraction >= 0.8) {
+    "ENTREZID"
+  } else {
+    "SYMBOL"
+  }
+  preferred_keytype <- toupper(as.character(preferred_keytype %||% character()))
+  candidates <- unique(c(heuristic, preferred_keytype, "SYMBOL", "ENSEMBL", "ENTREZID"))
+  candidates <- candidates[candidates %in% available]
+  requested_symbol_column <- toupper(as.character(symbol_column %||% "SYMBOL")[[1L]])
+  query_columns <- unique(c(requested_symbol_column, "SYMBOL", "ENTREZID"))
+  query_columns <- query_columns[query_columns %in% available_columns]
+  if (!length(candidates) || !length(query_columns)) {
     base$SYMBOL <- base$symbol_from_object
     base$ENTREZID <- NA_character_
+    base$mapping_keytype <- NA_character_
     return(base)
   }
-  mapped <- as.data.frame(mapped, stringsAsFactors = FALSE)
-  mapped <- mapped[!duplicated(mapped[[keytype]]), , drop = FALSE]
-  index <- match(keys, mapped[[keytype]])
-  base$SYMBOL <- if ("SYMBOL" %in% names(mapped)) as.character(mapped$SYMBOL[index]) else base$symbol_from_object
+  best <- NULL
+  best_score <- -1L
+  for (keytype in candidates) {
+    keys <- if (identical(keytype, "SYMBOL")) base$symbol_from_object else cleaned
+    mapped <- tryCatch(
+      suppressMessages(select_fun(
+        orgdb, keys = unique(keys), keytype = keytype, columns = query_columns
+      )),
+      error = function(e) NULL
+    )
+    if (is.null(mapped) || !nrow(mapped) || !keytype %in% names(mapped)) next
+    mapped <- as.data.frame(mapped, stringsAsFactors = FALSE)
+    mapped <- mapped[!duplicated(mapped[[keytype]]), , drop = FALSE]
+    index <- match(keys, mapped[[keytype]])
+    symbol_name <- intersect(c(requested_symbol_column, "SYMBOL"), names(mapped))
+    mapped_symbols <- if (length(symbol_name)) {
+      as.character(mapped[[symbol_name[[1L]]]][index])
+    } else {
+      rep(NA_character_, length(index))
+    }
+    score <- sum(!is.na(mapped_symbols) & nzchar(mapped_symbols))
+    if (score > best_score) {
+      best <- list(
+        keytype = keytype,
+        symbols = mapped_symbols,
+        entrez = if ("ENTREZID" %in% names(mapped)) {
+          as.character(mapped$ENTREZID[index])
+        } else if (identical(keytype, "ENTREZID")) {
+          as.character(keys)
+        } else {
+          rep(NA_character_, length(index))
+        }
+      )
+      best_score <- score
+    }
+    if (score >= ceiling(0.8 * nrow(base))) break
+  }
+  if (is.null(best) || best_score < 1L) {
+    base$SYMBOL <- base$symbol_from_object
+    base$ENTREZID <- NA_character_
+    base$mapping_keytype <- NA_character_
+    return(base)
+  }
+  base$SYMBOL <- best$symbols
   base$SYMBOL[is.na(base$SYMBOL) | !nzchar(base$SYMBOL)] <- base$symbol_from_object[is.na(base$SYMBOL) | !nzchar(base$SYMBOL)]
-  base$ENTREZID <- if ("ENTREZID" %in% names(mapped)) as.character(mapped$ENTREZID[index]) else NA_character_
+  base$ENTREZID <- best$entrez
+  base$mapping_keytype <- best$keytype
   base
 }
 
@@ -1884,7 +2179,7 @@ utils::globalVariables(c(
   artifacts
 }
 
-.fa_run_gsva <- function(object, cfg, gene_sets) {
+.fa_run_gsva <- function(object, cfg, gene_sets, resources = list()) {
   if (!length(gene_sets) || !.fa_pkg_available("GSVA")) return(NULL)
   counts <- .fa_matrix(object, "counts", cfg$assay %||% .fa_default_assay(object))
   meta <- .seurat_metadata(object)
@@ -1895,7 +2190,13 @@ utils::globalVariables(c(
   if (length(unique(samples[valid])) < 2L) return(NULL)
   pseudobulk <- .fa_sparse_group_sum(counts[, valid, drop = FALSE], samples[valid])
   symbols <- .fa_feature_symbols(object, cfg$assay %||% .fa_default_assay(object))
-  mapped_symbols <- unname(symbols[rownames(pseudobulk)])
+  orgdb <- .fa_orgdb(resources, cfg)
+  mapping <- .fa_feature_mapping(
+    rownames(pseudobulk), symbols, orgdb,
+    preferred_keytype = cfg$feature_keytype %||% resources$feature_keytype,
+    symbol_column = cfg$symbol_column %||% resources$symbol_column %||% "SYMBOL"
+  )
+  mapped_symbols <- as.character(mapping$SYMBOL[match(rownames(pseudobulk), mapping$feature)])
   keep <- !is.na(mapped_symbols) & nzchar(mapped_symbols) & !duplicated(toupper(mapped_symbols))
   pseudobulk <- pseudobulk[keep, , drop = FALSE]
   rownames(pseudobulk) <- mapped_symbols[keep]
@@ -1917,17 +2218,86 @@ utils::globalVariables(c(
 
 .fa_module_enrichment <- function(object, output, cfg, seed, verbose, species) {
   rankings <- .fa_get_analysis_misc(object, "differential_rankings")
-  gene_sets <- .fa_gene_sets(cfg)
-  gsva_result <- .fa_run_gsva(object, cfg, gene_sets)
   resources <- .fa_species_resources(species, cfg)
+  gene_sets <- .fa_gene_sets(cfg, species = species, resources = resources)
+  gene_set_source <- attr(gene_sets, "source") %||% "none"
+  gene_set_collections <- attr(gene_sets, "collections") %||% character()
+  gene_set_error <- attr(gene_sets, "auto_error") %||% NULL
+  gene_set_membership <- attr(gene_sets, "membership") %||% NULL
+  gene_set_db_versions <- attr(gene_sets, "database_versions") %||% character()
+  gsva_result <- .fa_run_gsva(object, cfg, gene_sets, resources = resources)
   orgdb <- .fa_orgdb(resources, cfg)
   cluster_profiler_available <- .fa_pkg_available("clusterProfiler")
   artifacts <- list()
+  gene_set_provenance <- data.frame(
+    source = gene_set_source,
+    species = as.character(attr(gene_sets, "msigdbr_species") %||% resources$scientific_name %||% species),
+    database_species = as.character(attr(gene_sets, "msigdbr_db_species") %||% NA_character_),
+    collections = paste(gene_set_collections, collapse = ","),
+    resource_version = if (length(gene_set_db_versions)) paste(gene_set_db_versions, collapse = ",") else NA_character_,
+    package_version = if (.fa_pkg_available("msigdbr")) .fa_package_version("msigdbr") else NA_character_,
+    ortholog_projection = if (identical(gene_set_source, "msigdbr")) {
+      isTRUE(resources$msigdbr_ortholog_projection)
+    } else {
+      NA
+    },
+    n_gene_sets = length(gene_sets),
+    n_unique_genes = length(unique(unlist(gene_sets, use.names = FALSE))),
+    loading_note = as.character(gene_set_error %||% "ok"),
+    stringsAsFactors = FALSE
+  )
+  artifacts[[length(artifacts) + 1L]] <- .fa_write_table_artifact(
+    gene_set_provenance, output, "enrichment", "gene_set_provenance",
+    "Gene-set resource provenance",
+    "One row describing the gene-set source used by ORA, GSEA, or GSVA. For non-human species, the database_species and target species distinguish native collections from ortholog-mapped collections.",
+    "gene-set resource",
+    list(n_gene_sets = "Number of loaded gene sets.",
+         n_unique_genes = "Number of unique target-species gene symbols across the loaded sets.",
+         loading_note = "ok, or the captured resource-loading error when no automatic set could be loaded.")
+  )
+  if (length(gene_sets)) {
+    if (is.null(gene_set_membership) || !nrow(gene_set_membership)) {
+      gene_set_membership <- do.call(rbind, lapply(names(gene_sets), function(term) {
+        data.frame(gs_name = term, gene_symbol = as.character(gene_sets[[term]]), stringsAsFactors = FALSE)
+      }))
+    }
+    gene_set_membership$resource_source <- gene_set_source
+    gene_set_membership$target_species <- as.character(
+      attr(gene_sets, "msigdbr_species") %||% resources$scientific_name %||% species
+    )
+    gene_set_membership$database_species <- as.character(
+      attr(gene_sets, "msigdbr_db_species") %||% NA_character_
+    )
+    artifacts[[length(artifacts) + 1L]] <- .fa_write_table_artifact(
+      gene_set_membership, output, "enrichment", "gene_set_membership",
+      "Gene-set membership",
+      paste0(
+        "One row per gene-set membership used by enrichment and GSVA. ",
+        if (identical(gene_set_source, "msigdbr") &&
+            isTRUE(resources$msigdbr_ortholog_projection)) {
+          "The source database is human MSigDB and target symbols are ortholog-projected; ortholog evidence columns are retained when provided by msigdbr."
+        } else if (identical(gene_set_source, "msigdbr")) {
+          "The selected MSigDB database matches the registered database species."
+        } else {
+          "Rows came from explicit user gene sets or GMT files; no MSigDB database origin or ortholog projection is inferred."
+        }
+      ),
+      "gene-set membership",
+      list(gs_name = "Gene-set identifier.", gene_symbol = "Target-species symbol used for matching.",
+           resource_source = "msigdbr or explicit user gene-set/GMT source.",
+           target_species = "Species whose symbols appear in gene_symbol.",
+           database_species = "MSigDB database species code when applicable.")
+    )
+  }
   completed_types <- character()
   skipped_reasons <- character()
   if (!is.null(rankings) && nrow(rankings) && cluster_profiler_available) {
     symbols <- .fa_feature_symbols(object, cfg$assay %||% .fa_default_assay(object))
-    mapping <- .fa_feature_mapping(unique(rankings$feature), symbols, orgdb)
+    mapping <- .fa_feature_mapping(
+      unique(rankings$feature), symbols, orgdb,
+      preferred_keytype = cfg$feature_keytype %||% resources$feature_keytype,
+      symbol_column = cfg$symbol_column %||% resources$symbol_column %||% "SYMBOL"
+    )
     artifacts[[length(artifacts) + 1L]] <- .fa_write_table_artifact(
       mapping, output, "enrichment", "feature_identifier_mapping", "Feature identifier mapping",
       "One row per differential feature. SYMBOL/ENTREZID are resolved with the selected species OrgDb when available; no other species is substituted.",
@@ -2055,7 +2425,14 @@ utils::globalVariables(c(
     )
     completed_types <- c(completed_types, "GSVA")
   } else if (!length(gene_sets)) {
-    skipped_reasons <- c(skipped_reasons, "GSVA needs explicitly supplied GMT/gene_sets")
+    skipped_reasons <- c(
+      skipped_reasons,
+      if (is.null(gene_set_error)) {
+        "GSVA needs a species-matched msigdbr resource or explicitly supplied GMT/gene_sets"
+      } else {
+        paste0("automatic gene-set loading failed: ", gene_set_error)
+      }
+    )
   }
   completed_types <- unique(completed_types)
   if (!length(completed_types)) {
@@ -2073,7 +2450,7 @@ utils::globalVariables(c(
     paste("Generated:", paste(completed_types, collapse = ", "), "."),
     "clusterProfiler/GSVA", artifacts,
     list(species = species, completed_types = completed_types, skipped = unique(skipped_reasons),
-         custom_gene_sets = length(gene_sets))
+         gene_set_source = gene_set_source, gene_sets = length(gene_sets))
   )
 }
 
@@ -2590,7 +2967,13 @@ utils::globalVariables(c(
   data <- data[, selected, drop = FALSE]
   meta <- meta[selected, , drop = FALSE]
   symbols <- .fa_feature_symbols(object, assay)
-  mapped <- unname(symbols[rownames(data)])
+  orgdb <- .fa_orgdb(resources, cfg)
+  mapping <- .fa_feature_mapping(
+    rownames(data), symbols, orgdb,
+    preferred_keytype = cfg$feature_keytype %||% resources$feature_keytype,
+    symbol_column = cfg$symbol_column %||% resources$symbol_column %||% "SYMBOL"
+  )
+  mapped <- as.character(mapping$SYMBOL[match(rownames(data), mapping$feature)])
   feature_keep <- !is.na(mapped) & nzchar(mapped) & !duplicated(toupper(mapped))
   data <- data[feature_keep, , drop = FALSE]
   rownames(data) <- mapped[feature_keep]
@@ -2720,25 +3103,105 @@ utils::globalVariables(c(
 
 .fa_cell_cycle_genes <- function(species, cfg) {
   if (length(cfg$s_genes) && length(cfg$g2m_genes)) {
-    return(list(s.genes = as.character(cfg$s_genes), g2m.genes = as.character(cfg$g2m_genes), source = "user"))
+    mapping <- rbind(
+      data.frame(phase_set = "S", source_human_symbol = NA_character_,
+                 target_symbol = as.character(cfg$s_genes), stringsAsFactors = FALSE),
+      data.frame(phase_set = "G2M", source_human_symbol = NA_character_,
+                 target_symbol = as.character(cfg$g2m_genes), stringsAsFactors = FALSE)
+    )
+    return(list(s.genes = as.character(cfg$s_genes), g2m.genes = as.character(cfg$g2m_genes),
+                source = "user", mapping = mapping))
   }
-  if (!species %in% c("human", "mouse")) return(NULL)
+  resources <- .fa_species_resources(species, cfg)
+  strategy <- resources$cell_cycle_strategy %||% "user_supplied"
+  if (identical(strategy, "user_supplied")) return(NULL)
   genes <- .fa_pkg_object("Seurat", "cc.genes.updated.2019")
   if (is.null(genes) || is.null(genes$s.genes) || is.null(genes$g2m.genes)) return(NULL)
-  list(s.genes = genes$s.genes, g2m.genes = genes$g2m.genes, source = "Seurat cc.genes.updated.2019")
+  if (identical(species, "human")) {
+    mapping <- rbind(
+      data.frame(phase_set = "S", source_human_symbol = genes$s.genes,
+                 target_symbol = genes$s.genes, stringsAsFactors = FALSE),
+      data.frame(phase_set = "G2M", source_human_symbol = genes$g2m.genes,
+                 target_symbol = genes$g2m.genes, stringsAsFactors = FALSE)
+    )
+    return(list(s.genes = genes$s.genes, g2m.genes = genes$g2m.genes,
+                source = "Seurat cc.genes.updated.2019; native human symbols", mapping = mapping))
+  }
+  if (.fa_pkg_available("babelgene") && !is.null(resources$scientific_name)) {
+    orthologs <- .fa_pkg_fun("babelgene", "orthologs")
+    requested <- unique(c(genes$s.genes, genes$g2m.genes))
+    mapped <- tryCatch(
+      orthologs(
+        requested, species = resources$scientific_name, human = TRUE,
+        min_support = as.integer(cfg$ortholog_min_support %||% 3L), top = TRUE
+      ),
+      error = function(e) NULL
+    )
+    if (!is.null(mapped) && nrow(mapped) && all(c("human_symbol", "symbol") %in% names(mapped))) {
+      s_target <- as.character(mapped$symbol[match(genes$s.genes, mapped$human_symbol)])
+      g_target <- as.character(mapped$symbol[match(genes$g2m.genes, mapped$human_symbol)])
+      mapping <- rbind(
+        data.frame(phase_set = "S", source_human_symbol = genes$s.genes,
+                   target_symbol = s_target, stringsAsFactors = FALSE),
+        data.frame(phase_set = "G2M", source_human_symbol = genes$g2m.genes,
+                   target_symbol = g_target, stringsAsFactors = FALSE)
+      )
+      mapping <- mapping[!is.na(mapping$target_symbol) & nzchar(mapping$target_symbol), , drop = FALSE]
+      return(list(
+        s.genes = unique(s_target[!is.na(s_target) & nzchar(s_target)]),
+        g2m.genes = unique(g_target[!is.na(g_target) & nzchar(g_target)]),
+        source = paste0(
+          "Seurat cc.genes.updated.2019 mapped by babelgene to ",
+          resources$scientific_name, " (minimum ortholog support ",
+          as.integer(cfg$ortholog_min_support %||% 3L), ")"
+        ),
+        mapping = mapping
+      ))
+    }
+  }
+  if (identical(species, "mouse")) {
+    mapping <- rbind(
+      data.frame(phase_set = "S", source_human_symbol = genes$s.genes,
+                 target_symbol = genes$s.genes, stringsAsFactors = FALSE),
+      data.frame(phase_set = "G2M", source_human_symbol = genes$g2m.genes,
+                 target_symbol = genes$g2m.genes, stringsAsFactors = FALSE)
+    )
+    return(list(
+      s.genes = genes$s.genes, g2m.genes = genes$g2m.genes,
+      source = "Seurat cc.genes.updated.2019; mouse case-insensitive symbol fallback (babelgene unavailable)",
+      mapping = mapping
+    ))
+  }
+  NULL
 }
 
 .fa_module_cell_cycle <- function(object, output, cfg, seed, verbose, species) {
   genes <- .fa_cell_cycle_genes(species, cfg)
   if (is.null(genes)) {
+    strategy <- .fa_species_resources(species, cfg)$cell_cycle_strategy %||% "user_supplied"
+    needs_user <- identical(strategy, "user_supplied")
     return(.fa_result(
-      object, "needs_input", "cell_cycle_genes_missing",
-      paste0("No validated cell-cycle gene set is configured for species '", species,
-             "'. Supply s_genes and g2m_genes; another species will not be substituted.")
+      object, if (needs_user) "needs_input" else "skipped",
+      if (needs_user) "cell_cycle_genes_missing" else "cell_cycle_ortholog_resource_unavailable",
+      if (needs_user) {
+        paste0("No validated cell-cycle gene set is configured for species '", species,
+               "'. Supply s_genes and g2m_genes; another species will not be substituted.")
+      } else {
+        paste0("The registered cell-cycle strategy for '", species,
+               "' could not load its Seurat/babelgene resource. Install the optional dependency or supply s_genes and g2m_genes.")
+      }
     ))
   }
   assay <- cfg$assay %||% .fa_default_assay(object)
-  symbols <- .fa_feature_symbols(object, assay)
+  symbols_from_object <- .fa_feature_symbols(object, assay)
+  resources <- .fa_species_resources(species, cfg)
+  orgdb <- .fa_orgdb(resources, cfg)
+  mapping <- .fa_feature_mapping(
+    names(symbols_from_object), symbols_from_object, orgdb,
+    preferred_keytype = cfg$feature_keytype %||% resources$feature_keytype,
+    symbol_column = cfg$symbol_column %||% resources$symbol_column %||% "SYMBOL"
+  )
+  symbols <- stats::setNames(as.character(mapping$SYMBOL), mapping$feature)
   s_features <- .fa_match_features(genes$s.genes, symbols)
   g2m_features <- .fa_match_features(genes$g2m.genes, symbols)
   if (length(s_features) < as.integer(cfg$min_genes_per_set %||% 5L) ||
@@ -2800,6 +3263,16 @@ utils::globalVariables(c(
       "matched feature"
     )
   )
+  if (!is.null(genes$mapping) && nrow(genes$mapping)) {
+    artifacts[[length(artifacts) + 1L]] <- .fa_write_table_artifact(
+      genes$mapping, output, "cell_cycle", "cell_cycle_gene_resource",
+      "Cell-cycle gene resource mapping",
+      "One row per source cell-cycle gene and phase set. Non-human target symbols are species-matched orthologs when babelgene is available; this table records the exact mapping used.",
+      "cell-cycle source gene",
+      list(source_human_symbol = "Human source symbol from Seurat cc.genes.updated.2019; missing for user-supplied target genes.",
+           target_symbol = "Species-matched symbol requested for feature matching.")
+    )
+  }
   if (!is.null(sample_column)) {
     valid <- !is.na(scores$sample) & nzchar(scores$sample) & !is.na(scores$Phase) & nzchar(scores$Phase)
     composition <- as.data.frame(table(sample = scores$sample[valid], phase = scores$Phase[valid]), stringsAsFactors = FALSE)
@@ -2865,7 +3338,7 @@ utils::globalVariables(c(
 # Transcription-factor expression --------------------------------------------
 
 .fa_default_tf_genes <- function(species) {
-  if (!species %in% c("human", "mouse")) return(character())
+  if (!species %in% c("human", "mouse", "rat", "pig", "cattle", "dog", "macaque")) return(character())
   c(
     "AR", "ARID1A", "ATF3", "BATF", "BCL6", "CEBPA", "CEBPB", "CREB1", "CTCF",
     "E2F1", "E2F2", "E2F3", "EBF1", "ELF1", "ELK1", "ERG", "ESR1", "ETS1",
@@ -2880,30 +3353,77 @@ utils::globalVariables(c(
   )
 }
 
+.fa_orgdb_tf_genes <- function(species, cfg) {
+  resources <- .fa_species_resources(species, cfg)
+  orgdb <- .fa_orgdb(resources, cfg)
+  if (is.null(orgdb) || !.fa_pkg_available("AnnotationDbi")) return(character())
+  select_fun <- .fa_pkg_fun("AnnotationDbi", "select")
+  keytypes_fun <- .fa_pkg_fun("AnnotationDbi", "keytypes")
+  columns_fun <- .fa_pkg_fun("AnnotationDbi", "columns")
+  keytypes <- tryCatch(keytypes_fun(orgdb), error = function(e) character())
+  columns <- tryCatch(columns_fun(orgdb), error = function(e) character())
+  if (!"GOALL" %in% keytypes || !"SYMBOL" %in% columns) return(character())
+  requested_columns <- intersect(c("SYMBOL", "ENTREZID", "EVIDENCEALL"), columns)
+  table <- tryCatch(
+    suppressMessages(select_fun(
+      orgdb, keys = "GO:0003700", keytype = "GOALL", columns = requested_columns
+    )),
+    error = function(e) NULL
+  )
+  if (is.null(table) || !nrow(table) || !"SYMBOL" %in% names(table)) return(character())
+  unique(as.character(table$SYMBOL[!is.na(table$SYMBOL) & nzchar(table$SYMBOL)]))
+}
+
 .fa_tf_catalog <- function(species, cfg) {
   genes <- cfg$tf_genes
+  source <- NULL
   if (is.data.frame(genes)) {
     column <- intersect(c("symbol", "gene", "tf", "TF"), names(genes))
     genes <- if (length(column)) genes[[column[[1L]]]] else character()
+    source <- "user data frame"
   }
   if (is.character(genes) && length(genes) == 1L && file.exists(genes)) {
     table <- tryCatch(utils::read.delim(genes, stringsAsFactors = FALSE), error = function(e) NULL)
     if (!is.null(table)) {
       column <- intersect(c("symbol", "gene", "tf", "TF"), names(table))
       genes <- if (length(column)) table[[column[[1L]]]] else table[[1L]]
+      source <- paste0("user file: ", basename(cfg$tf_genes))
     }
   }
-  genes <- unique(as.character(genes %||% .fa_default_tf_genes(species)))
-  genes[!is.na(genes) & nzchar(genes)]
+  genes <- unique(as.character(genes %||% character()))
+  genes <- genes[!is.na(genes) & nzchar(genes)]
+  if (length(genes)) {
+    attr(genes, "source") <- source %||% "user vector"
+    return(genes)
+  }
+  genes <- .fa_orgdb_tf_genes(species, cfg)
+  if (length(genes)) {
+    attr(genes, "source") <- paste0(
+      "species OrgDb GOALL:GO:0003700 (", .fa_species_resources(species, cfg)$orgdb, ")"
+    )
+    return(genes)
+  }
+  genes <- .fa_default_tf_genes(species)
+  if (length(genes)) attr(genes, "source") <- "built-in curated TF seed (fallback, not a complete catalog)"
+  genes
 }
 
 .fa_module_tf <- function(object, output, cfg, seed, verbose, species) {
   catalog <- .fa_tf_catalog(species, cfg)
+  catalog_source <- attr(catalog, "source") %||% "unknown"
   if (!length(catalog)) {
+    strategy <- .fa_species_resources(species, cfg)$tf_catalog_strategy %||% "user_supplied"
+    needs_user <- identical(strategy, "user_supplied")
     return(.fa_result(
-      object, "needs_input", "tf_catalog_missing",
-      paste0("No validated TF catalog is configured for species '", species,
-             "'. Supply tf_genes; another species catalog will not be substituted.")
+      object, if (needs_user) "needs_input" else "skipped",
+      if (needs_user) "tf_catalog_missing" else "species_orgdb_tf_catalog_unavailable",
+      if (needs_user) {
+        paste0("No validated TF catalog is configured for species '", species,
+               "'. Supply tf_genes; another species catalog will not be substituted.")
+      } else {
+        paste0("The registered OrgDb TF strategy for '", species,
+               "' is unavailable in this R library. Install the matching OrgDb or supply tf_genes.")
+      }
     ))
   }
   assay <- cfg$assay %||% .fa_default_assay(object)
@@ -2911,7 +3431,15 @@ utils::globalVariables(c(
   if (is.null(counts)) {
     return(.fa_result(object, "skipped", "counts_missing", "TF expression summaries require a counts layer."))
   }
-  symbols <- .fa_feature_symbols(object, assay)
+  symbols_from_object <- .fa_feature_symbols(object, assay)
+  resources <- .fa_species_resources(species, cfg)
+  orgdb <- .fa_orgdb(resources, cfg)
+  mapping <- .fa_feature_mapping(
+    names(symbols_from_object), symbols_from_object, orgdb,
+    preferred_keytype = cfg$feature_keytype %||% resources$feature_keytype,
+    symbol_column = cfg$symbol_column %||% resources$symbol_column %||% "SYMBOL"
+  )
+  symbols <- stats::setNames(as.character(mapping$SYMBOL), mapping$feature)
   features <- .fa_match_features(catalog, symbols)
   if (length(features) < as.integer(cfg$min_tf_genes %||% 5L)) {
     return(.fa_result(
@@ -2928,7 +3456,7 @@ utils::globalVariables(c(
   matched$matched <- !is.na(matched$matched_feature)
   artifacts <- list(.fa_write_table_artifact(
     matched, output, "tf", "tf_catalog_mapping", "TF catalog mapping",
-    "One row per requested TF symbol. matched_feature is the exact assay row used for expression summaries.",
+    paste0("One row per requested TF symbol. matched_feature is the exact assay row used for expression summaries. Catalog source: ", catalog_source, "."),
     "TF catalog entry", list(matched = "TRUE when the TF symbol matched an assay feature case-insensitively.")
   ))
   tf_counts <- counts[features, , drop = FALSE]
@@ -2990,12 +3518,17 @@ utils::globalVariables(c(
       width = max(8, 0.35 * length(unique(heat$group)) + 4), height = max(6, 0.18 * length(top_symbols) + 2)
     ))
   }
+  fallback_catalog <- grepl("fallback|curated TF seed", catalog_source, ignore.case = TRUE)
   .fa_result(
-    object, "completed", "tf_expression_completed",
-    sprintf("Expression summaries were generated for %s matched TF genes; no TF activity was inferred.", length(features)),
+    object, if (fallback_catalog) "partial" else "completed",
+    if (fallback_catalog) "curated_tf_seed_fallback" else "tf_expression_completed",
+    sprintf(
+      "Expression summaries were generated for %s matched TF genes from %s; no TF activity was inferred.",
+      length(features), catalog_source
+    ),
     "sparse pseudobulk expression", artifacts,
     list(species = species, requested_tfs = length(catalog), matched_tfs = length(features),
-         grouping_schemes = names(schemes))
+         catalog_source = catalog_source, grouping_schemes = names(schemes))
   )
 }
 

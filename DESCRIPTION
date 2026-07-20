@@ -1,12 +1,15 @@
 Package: scRDSreport
 Type: Package
 Title: Reproducible Reports from Single-Cell RDS Files
-Version: 0.2.0
+Version: 0.3.0
 Authors@R: person("Anbuengsi", role = c("aut", "cre"), email = "an.bunengsi@qq.com")
 Description: Builds reproducible, self-contained single-cell RNA sequencing
     reports from RDS files. Existing Seurat analyses and annotations are
     preserved, minimally processed objects can be completed with the SCP
-    package, and eligible quality-control, dimensionality, composition,
+    package, and a common-species registry connects human, mouse, rat,
+    zebrafish, pig, cattle, chicken, dog, and macaque data to matched gene
+    identifiers, quality-control patterns, functional resources, and guarded
+    optional references. Eligible quality-control, dimensionality, composition,
     differential-expression, enrichment, trajectory, communication,
     cell-cycle, transcription-factor-expression, and copy-number modules are
     run through a fault-isolated analysis plan. Reports include downloadable
@@ -35,6 +38,7 @@ Imports:
     utils
 Suggests:
     AnnotationDbi,
+    babelgene,
     CellChat,
     celldex,
     circlize,
@@ -56,10 +60,18 @@ Suggests:
     monocle3,
     org.Hs.eg.db,
     org.Mm.eg.db,
+    org.Rn.eg.db,
+    org.Dr.eg.db,
+    org.Ss.eg.db,
+    org.Bt.eg.db,
+    org.Gg.eg.db,
+    org.Cf.eg.db,
+    org.Mmu.eg.db,
     plotly,
     quarto,
     rtracklayer,
     scales,
+    scrapper,
     SeuratWrappers,
     SingleCellExperiment,
     SingleR,

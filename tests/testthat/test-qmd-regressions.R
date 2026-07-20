@@ -13,4 +13,6 @@ test_that("Quarto embedding plots do not override mapped group colours", {
   expect_match(code, "emit_html(interpretation_panel", fixed = TRUE)
   expect_false(grepl("print(figure_interpretation", code, fixed = TRUE))
   expect_false(grepl("print(interpretation_panel", code, fixed = TRUE))
+  expect_match(code, "generated_annotation_sources", fixed = TRUE)
+  expect_false(grepl("grepl(\"^explicit_\"", code, fixed = TRUE))
 })

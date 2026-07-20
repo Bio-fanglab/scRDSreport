@@ -130,6 +130,13 @@
 .celltype_eligibility <- function(config, context, resources) {
   mode <- config$annotation$mode
   has_annotation <- .context_value(context, "has_annotation")
+  celltype_config <- utils::modifyList(
+    config$celltype %||% list(),
+    config$module_options$celltype %||% list(),
+    keep.null = TRUE
+  )
+  explicit_reference <- !is.null(celltype_config$reference) &&
+    length(celltype_config$reference) > 0L
   if (identical(mode, "preserve")) {
     if (.known_flag(has_annotation)) {
       if (isTRUE(has_annotation)) return(.eligibility_result(TRUE, "ready", "Existing annotations will be preserved."))
@@ -139,10 +146,33 @@
   }
   if (identical(mode, "auto")) {
     if (is.null(resources)) return(.eligibility_result())
-    available <- .resource_field_available(resources, "auto_annotation_reference") &&
-      .resource_field_available(resources, "orgdb")
+    available <- explicit_reference ||
+      (.resource_field_available(resources, "auto_annotation_reference") &&
+         .resource_field_available(resources, "orgdb"))
     if (available) return(.eligibility_result(TRUE, "ready", "Explicit automatic-annotation mode has compatible resources."))
     return(.eligibility_result(FALSE, "annotation_resources_unavailable", "Automatic annotation has no compatible species resource."))
+  }
+  if (identical(mode, "auto_if_missing")) {
+    if (.known_flag(has_annotation) && isTRUE(has_annotation)) {
+      return(.eligibility_result(
+        TRUE, "ready",
+        "An existing RDS annotation is available and will be preserved."
+      ))
+    }
+    if (is.null(resources)) return(.eligibility_result())
+    available <- explicit_reference ||
+      (.resource_field_available(resources, "auto_annotation_reference") &&
+         .resource_field_available(resources, "orgdb"))
+    if (available) {
+      return(.eligibility_result(
+        TRUE, "ready",
+        "No existing annotation is available; a species-matched reference annotation may be generated."
+      ))
+    }
+    return(.eligibility_result(
+      FALSE, "annotation_resources_unavailable",
+      "No existing annotation or compatible species-matched reference is available."
+    ))
   }
   if (is.null(resources)) return(.eligibility_result())
   if (.resource_field_available(resources, "manual_markers")) {
@@ -182,7 +212,10 @@
     has_gene_sets <- .resource_field_available(resources, "gene_sets") ||
       .resource_field_available(resources, "gene_sets_strategy")
     if (has_ora && has_gene_sets) {
-      return(.eligibility_result(TRUE, "ready", "GO/KEGG and gene-set resources are available."))
+      return(.eligibility_result(
+        TRUE, "ready",
+        "Species-matched GO/KEGG and gene-set resources are registered; runtime checks installed packages and resource availability."
+      ))
     }
     return(.eligibility_result(FALSE, "enrichment_resources_unavailable", "Complete GO/KEGG/GSEA/GSVA resources are unavailable for this species."))
   }
@@ -211,7 +244,10 @@
     if (!.resource_field_available(resources, "cellchat_db")) {
       return(.eligibility_result(FALSE, "cellchat_database_unavailable", "No CellChat database is registered for this species."))
     }
-    return(.eligibility_result(TRUE, "ready", "Annotation and CellChat resources are available."))
+    return(.eligibility_result(
+      TRUE, "ready",
+      "Annotation and a species-matched CellChat database are registered; runtime checks the installed CellChat package."
+    ))
   }
   if (identical(id, "cell_cycle")) {
     if (is.null(resources)) return(.eligibility_result())

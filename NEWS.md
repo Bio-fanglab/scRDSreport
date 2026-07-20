@@ -1,3 +1,40 @@
+# scRDSreport 0.3.0
+
+- Expanded the built-in species registry from human and mouse to nine common
+  species: human, mouse, rat, zebrafish, pig, cattle, chicken, dog, and rhesus
+  macaque. `supported_species()` reports registered resources, capability tiers,
+  and which optional dependencies are installed in the current R environment.
+- Added species-specific aliases, taxonomy, Ensembl prefixes, QC patterns,
+  chromosomes, genome assemblies, OrgDb packages, KEGG codes, and explicit
+  conflict reporting when a user-selected species disagrees with feature-ID
+  detection. Unknown species still never fall back to mouse.
+- Made `annotation_mode = "auto_if_missing"` the default: existing RDS
+  annotations are preserved; otherwise a trusted species-matched reference is
+  attempted. Built-in references currently use HumanPrimaryCellAtlasData for
+  human and the general MouseRNAseqData reference for mouse, with ImmGenData as
+  an explicit immune-focused alternative. Generated labels use a separate
+  column and uncertain SingleR labels remain missing.
+- Human and mouse now use their HS/H and MM/MH MSigDB database/collection
+  pairs, respectively. The other
+  seven built-in nonhuman species use explicit human-to-target ortholog
+  projection through msigdbr, with database version and available ortholog
+  evidence exported instead of presenting the result as a native database.
+- Added nonhuman cell-cycle mapping from Seurat human S/G2M genes through
+  babelgene, and species OrgDb-derived TF catalogues from
+  `GOALL:GO:0003700`. Exact cell-cycle mappings and resource provenance are
+  downloadable.
+- Clarified that `species = "mouse"` selects mouse OrgDb, KEGG, QC, MSigDB,
+  cell-cycle, TF, CellChat, annotation, and genome-resource routes, while an
+  already analyzed RDS still needs an explicit `profile = "full"` config to
+  request new advanced modules.
+- Added ENTREZID-aware feature mapping, conservative handling of ambiguous
+  uppercase symbols, species-aware mitochondrial prefiltering for Ensembl-only
+  inputs, and a recorded cell-level SingleR fallback when optional cluster
+  aggregation support is unavailable.
+- Documented scRDSreport as the RDS-to-report package stage of the FangLab
+  `run_scrnaseq.sh`/`scRNAseq.qmd` workflow. FASTQ alignment, quantification,
+  Cell Ranger, nf-core, and Nextflow remain upstream of the package boundary.
+
 # scRDSreport 0.2.0
 
 - Rebuilt the report around the complete twelve-chapter analysis structure of

@@ -315,15 +315,19 @@
 #' @param marker_args Named list passed to `SCP::RunDEtest()`.
 #' @param annotation_col Optional existing cell-type/annotation metadata column.
 #'   When omitted, common annotation column names are detected automatically.
-#'   The package never invents or overwrites cell-type annotations.
+#'   Existing values are never overwritten. With the default
+#'   `annotation_mode = "auto_if_missing"`, a new species-matched SingleR column
+#'   is attempted only when the input contains no annotation.
 #' @param species `"auto"` or one non-empty species name, such as `"human"`,
-#'   `"mouse"`, `"rat"`, or `"zebrafish"`. Auto uses stable feature-ID
-#'   prefixes before gene symbols. Species-specific modules run only when a
-#'   matching resource profile is available.
+#'   `"mouse"`, `"rat"`, `"zebrafish"`, `"pig"`, `"cattle"`, `"chicken"`,
+#'   `"dog"`, or `"macaque"`. Auto uses stable feature-ID prefixes before gene
+#'   symbols. Species-specific modules run only with a matching registered or
+#'   explicitly supplied resource; another species is never substituted.
 #' @param config A configuration created by \code{\link{report_config}()}. When omitted,
 #'   raw/partial objects use the full profile and analyzed objects use the
 #'   report-only profile. Explicit full profiles can add advanced modules to an
-#'   existing analysis. Existing annotations are preserved by default.
+#'   existing analysis. Existing annotations always take precedence under the
+#'   default `auto_if_missing` policy.
 #' @param analysis_max_cells Maximum cells passed to SCP. `Inf` (default) keeps
 #'   all retained cells; a finite value creates a deterministic analysis subset
 #'   while the original RDS remains available for download.
@@ -469,6 +473,14 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
     }
   )
   detected_species <- .detect_species(rownames(raw_matrix_object))
+  configured_species <- config$resource_overrides$species %||% NULL
+  species_status <- .species_selection_status(
+    requested = species,
+    detected = detected_species,
+    configured = configured_species
+  )
+  selected_species <- species_status$selected
+  resource_status <- .resolve_species_resources(config, selected_species)
 
   before <- .object_inventory(object)
   status_before <- .analysis_status(before)
@@ -496,6 +508,11 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
     max_features = max_features,
     max_counts = max_counts,
     max_percent_mt = max_percent_mt,
+    mitochondrial_pattern = resource_status$mitochondrial_pattern %||% "^MT-",
+    pattern_ignore_case = resource_status$pattern_ignore_case %||% TRUE,
+    orgdb = resource_status$orgdb %||% NULL,
+    feature_keytype = resource_status$feature_keytype %||% NULL,
+    symbol_column = resource_status$symbol_column %||% "SYMBOL",
     verbose = verbose
   )
   object <- filtering$object
@@ -574,14 +591,27 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
   } else {
     .sc_message(verbose, "Preserving existing analysis (status: %s).", status_before)
   }
-  configured_species <- config$resource_overrides$species %||% NULL
-  species_status <- .species_selection_status(
-    requested = species,
-    detected = detected_species,
-    configured = configured_species
+  config$qc <- utils::modifyList(
+    list(
+      orgdb = resource_status$orgdb %||% NULL,
+      feature_keytype = resource_status$feature_keytype %||% NULL,
+      symbol_column = resource_status$symbol_column %||% "SYMBOL",
+      mitochondrial_pattern = resource_status$mitochondrial_pattern %||% "^MT-",
+      ribosomal_pattern = resource_status$ribosomal_pattern %||% "^RP[SL]",
+      hemoglobin_pattern = resource_status$hemoglobin_pattern %||% "^HB[ABDEGMQZ]",
+      pattern_ignore_case = resource_status$pattern_ignore_case %||% TRUE
+    ),
+    config$qc %||% list(),
+    keep.null = TRUE
   )
-  selected_species <- species_status$selected
-  resource_status <- .resolve_species_resources(config, selected_species)
+  config$celltype <- utils::modifyList(
+    list(
+      auto_annotation_reference = resource_status$auto_annotation_reference %||% NULL,
+      allow_reference_download = TRUE
+    ),
+    config$celltype %||% list(),
+    keep.null = TRUE
+  )
   full_analysis <- tryCatch(
     .run_full_analysis(
       object = object,
@@ -654,22 +684,42 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
     analysis_sample_counts[as.character(sample_design_report$sample_id)]
   )
   sample_design_report$n_cells_analysis[is.na(sample_design_report$n_cells_analysis)] <- 0L
+  celltype_details <- full_analysis$modules$celltype$details %||% list()
+  generated_annotation_column <- celltype_details$annotation_column %||% NULL
+  generated_annotation_mode <- celltype_details$mode %||% NULL
+  is_generated_annotation <- !is.null(generated_annotation_column) &&
+    length(generated_annotation_column) == 1L &&
+    generated_annotation_column %in% names(meta_after) &&
+    !identical(generated_annotation_mode, "preserve")
   analysis_annotation_columns <- unique(c(
     original_annotation_columns[original_annotation_columns %in% names(meta_after)],
-    .annotation_columns(meta_after)
+    .annotation_columns(meta_after),
+    if (is_generated_annotation) generated_annotation_column else character()
   ))
   analysis_annotation_columns <- analysis_annotation_columns[
     !is.na(analysis_annotation_columns) & nzchar(analysis_annotation_columns)
   ]
   annotation_status$analysis_columns <- analysis_annotation_columns
-  if (!identical(config$annotation$mode, "preserve")) {
-    generated <- setdiff(analysis_annotation_columns, original_annotation_columns)
-    annotation_status$generated_columns <- generated
-    annotation_status$source <- if (length(generated)) {
-      paste0("explicit_", config$annotation$mode)
+  annotation_status$generated_columns <- if (is_generated_annotation) {
+    generated_annotation_column
+  } else {
+    character()
+  }
+  if (is_generated_annotation) {
+    annotation_status$source <- if (identical(generated_annotation_mode, "manual")) {
+      "manual_mapping"
     } else {
-      annotation_status$source
+      "species_reference_SingleR"
     }
+    annotation_status$primary_column <- generated_annotation_column
+  } else if (length(original_annotation_columns)) {
+    annotation_status$source <- "rds_metadata"
+  } else {
+    annotation_status$source <- "none"
+  }
+  celltype_message <- full_analysis$modules$celltype$message %||% NULL
+  if (!is.null(celltype_message) && nzchar(celltype_message)) {
+    annotation_status$message <- celltype_message
   }
   after <- .object_inventory(object)
 
@@ -683,12 +733,21 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
   )
   analysis_files <- .artifacts_to_manifest_rows(full_analysis$artifacts, output)
   manifest_files <- .bind_rows_fill(manifest_files, analysis_files)
+  resource_dependency_names <- unlist(lapply(
+    list(resource_status$orgdb, resource_status$txdb),
+    function(resource) {
+      if (!is.character(resource)) return(character())
+      resource[!is.na(resource) & nzchar(resource)]
+    }
+  ), use.names = FALSE)
   dependency_names <- c(
     "scRDSreport", "SCP", "Seurat", "SeuratObject", "Matrix", "DT",
-    "SingleR", "celldex", "edgeR", "clusterProfiler", "GSVA",
+    "AnnotationDbi", "SingleR", "celldex", "edgeR", "clusterProfiler", "GSVA",
+    "msigdbr", "babelgene",
     "monocle3", "SeuratWrappers", "CellChat", "infercnv",
-    "ComplexHeatmap", "plotly", "quarto"
+    "ComplexHeatmap", "plotly", "quarto", resource_dependency_names
   )
+  dependency_names <- unique(dependency_names[!is.na(dependency_names) & nzchar(dependency_names)])
   dependency_table <- data.frame(
     package = dependency_names,
     installed = vapply(dependency_names, requireNamespace, logical(1), quietly = TRUE),
@@ -699,7 +758,7 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
     stringsAsFactors = FALSE
   )
   package_version <- dependency_table$version[dependency_table$package == "scRDSreport"]
-  if (is.na(package_version) || !length(package_version)) package_version <- "0.2.0"
+  if (is.na(package_version) || !length(package_version)) package_version <- "0.3.0"
   created_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z")
   input_sha256 <- .sha256_file(input)
   hash_token <- if (length(input_sha256) && !is.na(input_sha256) && nzchar(input_sha256)) {

@@ -31,12 +31,12 @@ test_that("public v0.2 configuration bridges module, root, and species resources
 
   rat <- species_resources("Rattus norvegicus")
   expect_equal(rat$species, "rat")
-  expect_false(rat$supported)
-  expect_null(rat$orgdb)
-  expect_null(rat$kegg_code)
-  expect_null(scRDSreport:::.fa_species_resources("rat")$orgdb)
-  expect_null(scRDSreport:::.fa_species_resources("zebrafish")$kegg)
-  expect_null(scRDSreport:::.fa_cell_cycle_genes("rat", list()))
+  expect_true(rat$supported)
+  expect_equal(rat$orgdb, "org.Rn.eg.db")
+  expect_equal(rat$kegg_code, "rno")
+  expect_equal(scRDSreport:::.fa_species_resources("rat")$orgdb, "org.Rn.eg.db")
+  expect_equal(scRDSreport:::.fa_species_resources("zebrafish")$kegg, "dre")
+  expect_equal(rat$cell_cycle_strategy, "babelgene_human_seurat_cc_orthologs")
   expect_length(scRDSreport:::.fa_default_tf_genes("zebrafish"), 0L)
 
   rat_override <- scRDSreport:::.fa_species_resources(
@@ -61,6 +61,8 @@ test_that("explicit species provenance is not confused with automatic detection"
   expect_equal(explicit$detected, "mouse")
   expect_equal(explicit$confidence, "user")
   expect_equal(explicit$basis, "running species argument")
+  expect_true(explicit$conflict)
+  expect_match(explicit$message, "conflicts")
 
   configured <- scRDSreport:::.species_selection_status("auto", detected, "rat")
   expect_equal(configured$selected, "rat")
@@ -71,6 +73,7 @@ test_that("explicit species provenance is not confused with automatic detection"
   expect_equal(automatic$selected, "mouse")
   expect_equal(automatic$confidence, "high")
   expect_equal(automatic$basis, "ENSMUSG feature IDs")
+  expect_false(automatic$conflict)
 })
 
 test_that("raw-barcode QC applies count thresholds before sparse mitochondrial filtering", {

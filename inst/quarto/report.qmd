@@ -1031,6 +1031,13 @@ htmltools::div(
     })
   )
 )
+if (isTRUE(manifest$species$conflict)) {
+  emit_html(htmltools::div(
+    class = "callout callout-style-default callout-warning no-icon",
+    htmltools::div(class = "callout-header", "物种选择与 feature ID 证据冲突"),
+    htmltools::div(class = "callout-body", safe_text(manifest$species$message, "请核对 species 参数和输入 RDS。"))
+  ))
+}
 ```
 
 ```{r method-strip}
@@ -1038,7 +1045,18 @@ methods <- c(
   "分析引擎" = if (isTRUE(manifest$scp_was_run)) "SCP 已运行" else "保留输入对象已有分析",
   "样本设计" = safe_text(manifest$sample_source, "未记录"),
   "整合策略" = safe_text(manifest$integration_method, "none"),
-  "注释来源" = if (identical(annotation_info$source %||% "none", "none")) "未提供，不自动猜测" else "输入 RDS 或已有对象"
+  "注释来源" = switch(
+    annotation_info$source %||% "none",
+    rds_metadata = "输入 RDS 原始注释",
+    species_reference_SingleR = "物种匹配参考（SingleR，新列）",
+    manual_mapping = "用户手工 mapping/marker（新列）",
+    "未提供；仅显示 cluster 上下文"
+  ),
+  "物种证据" = paste0(
+    "选择 ", safe_text(manifest$species$selected, "unknown"),
+    "；检测 ", safe_text(manifest$species$detected, "unknown"),
+    "；", safe_text(manifest$species$basis, "未记录")
+  )
 )
 htmltools::div(
   class = "method-strip",
@@ -1228,13 +1246,16 @@ module_status_card("celltype")
 
 ```{r celltype-source}
 annotation_source <- annotation_info$source %||% "none"
+generated_annotation_sources <- c("species_reference_SingleR", "manual_mapping")
+generated_annotation <- annotation_source %in% generated_annotation_sources ||
+  length(annotation_info$generated_columns %||% character()) > 0L
 if (identical(annotation_source, "none")) {
   htmltools::div(class = "report-alert", "输入 RDS 和已有分析对象中没有检测到细胞类型注释。本包不会自行添加或猜测注释。")
-} else if (grepl("^explicit_", annotation_source)) {
+} else if (generated_annotation) {
   columns <- unique(c(annotation_info$generated_columns, annotation_info$analysis_columns))
   htmltools::div(class = "report-alert", paste0(
-    "本次调用显式启用了 ", sub("^explicit_", "", annotation_source),
-    " 注释模式；生成结果写入新列，不覆盖原始注释：", paste(columns[nzchar(columns)], collapse = "，"), "。"
+    "本次分析生成了独立的 ", annotation_source,
+    " 注释结果，不覆盖原始注释：", paste(columns[nzchar(columns)], collapse = "，"), "。"
   ))
 } else {
   columns <- unique(c(annotation_info$original_columns, annotation_info$columns, annotation_info$analysis_columns))
@@ -1264,7 +1285,6 @@ render_module_figures("celltype", max_figures = 3L)
 ## 注释表
 
 ```{r celltype-table}
-generated_annotation <- grepl("^explicit_", annotation_source)
 annotation_candidates <- if (generated_annotation) {
   c(table_file_indices(module_get("celltype")$indices), which(files$section == "annotation_analysis"))
 } else {
@@ -1651,7 +1671,7 @@ if (!nrow(sample_design)) {
 ```
 
 ```{r annotation-and-metadata}
-download_annotation_candidates <- if (grepl("^explicit_", annotation_info$source %||% "none")) {
+download_annotation_candidates <- if (generated_annotation) {
   c(table_file_indices(module_get("celltype")$indices), which(files$section == "annotation_analysis"))
 } else {
   c(which(files$section == "annotation_original"), which(files$section == "annotation_analysis"))
@@ -1659,10 +1679,10 @@ download_annotation_candidates <- if (grepl("^explicit_", annotation_info$source
 annotation_row <- unique(download_annotation_candidates)[1]
 annotation_table <- read_report_table(annotation_row, nrows = 2000L)
 if (!is.null(annotation_table) && nrow(annotation_table)) {
-  print(htmltools::tags$h3(if (grepl("^explicit_", annotation_info$source %||% "none")) "显式生成的注释预览" else "原始 RDS 注释预览"))
+  print(htmltools::tags$h3(if (generated_annotation) "新生成的注释预览" else "原始 RDS 注释预览"))
   print(render_table_block(
     annotation_table,
-    row_text = if (grepl("^explicit_", annotation_info$source %||% "none")) "每行代表一个细胞或注释结果记录，生成值写入新列。" else "每行代表输入 RDS 中的一个细胞，注释值保持原样。",
+    row_text = if (generated_annotation) "每行代表一个细胞或注释结果记录，生成值写入新列。" else "每行代表输入 RDS 中的一个细胞，注释值保持原样。",
     label = files$label[annotation_row], module_id = "downloads",
     file_index = annotation_row, total_rows = files$rows[annotation_row],
     how = "使用 cell 列与表达矩阵和降维坐标对齐，其他列是已有注释字段。",

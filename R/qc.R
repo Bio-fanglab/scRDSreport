@@ -26,7 +26,9 @@
     (stats::median(features, na.rm = TRUE) < min_features || low_fraction >= 0.5)
 }
 
-.mitochondrial_percent <- function(object) {
+.mitochondrial_percent <- function(object, pattern = "^MT-", ignore_case = TRUE,
+                                   orgdb = NULL, preferred_keytype = NULL,
+                                   symbol_column = "SYMBOL") {
   assay <- tryCatch(SeuratObject::DefaultAssay(object), error = function(e) NULL)
   if (is.null(assay) || !nzchar(assay)) return(NULL)
   counts <- .layer_data(object, assay, "counts")
@@ -44,7 +46,18 @@
       symbols[use] <- replacement[use]
     }
   }
-  mitochondrial <- grepl("^MT-", symbols, ignore.case = TRUE)
+  if (!is.null(orgdb) && exists(".fa_feature_mapping", mode = "function", inherits = TRUE)) {
+    feature_symbols <- stats::setNames(symbols, rownames(counts))
+    mapping <- .fa_feature_mapping(
+      rownames(counts), feature_symbols, orgdb,
+      preferred_keytype = preferred_keytype,
+      symbol_column = symbol_column
+    )
+    mapped <- as.character(mapping$SYMBOL[match(rownames(counts), mapping$feature)])
+    use <- !is.na(mapped) & nzchar(mapped)
+    symbols[use] <- mapped[use]
+  }
+  mitochondrial <- grepl(pattern, symbols, ignore.case = isTRUE(ignore_case))
   if (!any(mitochondrial)) return(NULL)
   totals <- as.numeric(Matrix::colSums(counts))
   list(
@@ -58,6 +71,10 @@
                                     min_features = 200L, min_counts = 0L,
                                     max_features = Inf, max_counts = Inf,
                                     max_percent_mt = Inf,
+                                    mitochondrial_pattern = "^MT-",
+                                    pattern_ignore_case = TRUE,
+                                    orgdb = NULL, feature_keytype = NULL,
+                                    symbol_column = "SYMBOL",
                                     verbose = TRUE) {
   mode <- match.arg(mode)
   meta <- .seurat_metadata(object)
@@ -72,6 +89,7 @@
     max_features = max_features,
     max_counts = max_counts,
     max_percent_mt = max_percent_mt,
+    mitochondrial_pattern = mitochondrial_pattern,
     mitochondrial_features = 0L,
     cells_removed_mitochondrial = 0L,
     cells_before = nrow(meta),
@@ -113,7 +131,14 @@
   object <- object[, qc$keep]
   mitochondrial <- NULL
   if (is.finite(max_percent_mt)) {
-    mitochondrial <- .mitochondrial_percent(object)
+    mitochondrial <- .mitochondrial_percent(
+      object,
+      pattern = mitochondrial_pattern,
+      ignore_case = pattern_ignore_case,
+      orgdb = orgdb,
+      preferred_keytype = feature_keytype,
+      symbol_column = symbol_column
+    )
     if (!is.null(mitochondrial)) {
       mt_keep <- is.finite(mitochondrial$percent) &
         mitochondrial$percent <= max_percent_mt

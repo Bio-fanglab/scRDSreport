@@ -4,7 +4,7 @@ test_that("report_config defaults to the complete full profile", {
   expect_equal(config$profile, "full")
   expect_equal(names(config$modules), scRDSreport:::.report_module_ids())
   expect_true(all(config$modules))
-  expect_equal(config$annotation$mode, "preserve")
+  expect_equal(config$annotation$mode, "auto_if_missing")
   expect_equal(config$differential$strategy, "auto")
   expect_null(config$trajectory$root)
   expect_null(config$cnv$reference_groups)
@@ -18,10 +18,64 @@ test_that("module_options are validated and exposed to module runners", {
   expect_true(config$qc$filter)
   expect_equal(config$qc$max_percent_mt, 15)
   expect_equal(config$module_options$pseudotime$max_cells, 5000)
+  merged <- report_config(
+    differential = "wilcox",
+    module_options = list(differential = list(max_contrasts = 3L))
+  )
+  expect_equal(merged$differential$strategy, "wilcox")
+  expect_equal(merged$differential$max_contrasts, 3L)
   expect_error(
     report_config(module_options = list(unknown = list(enabled = TRUE))),
     "Unknown module option target"
   )
+})
+
+test_that("auto_if_missing preserves existing annotations and otherwise requires a matched reference", {
+  config <- report_config()
+  mouse_with_annotation <- scRDSreport:::.build_analysis_plan(
+    config,
+    context = list(
+      species = "mouse", has_annotation = TRUE, has_clusters = TRUE,
+      n_samples = 2L, n_cells = 500L
+    )
+  )
+  expect_equal(
+    scRDSreport:::.module_by_id(mouse_with_annotation, "celltype")$reason,
+    "ready"
+  )
+
+  mouse_without_annotation <- scRDSreport:::.build_analysis_plan(
+    config,
+    context = list(
+      species = "mouse", has_annotation = FALSE, has_clusters = TRUE,
+      n_samples = 2L, n_cells = 500L
+    )
+  )
+  expect_true(scRDSreport:::.module_by_id(mouse_without_annotation, "celltype")$eligible)
+
+  rat_without_annotation <- scRDSreport:::.build_analysis_plan(
+    config,
+    context = list(
+      species = "rat", has_annotation = FALSE, has_clusters = TRUE,
+      n_samples = 2L, n_cells = 500L
+    )
+  )
+  expect_equal(
+    scRDSreport:::.module_by_id(rat_without_annotation, "celltype")$reason,
+    "annotation_resources_unavailable"
+  )
+
+  rat_reference <- report_config(
+    module_options = list(celltype = list(reference = structure(list(dummy = TRUE), class = "synthetic_reference")))
+  )
+  rat_with_reference <- scRDSreport:::.build_analysis_plan(
+    rat_reference,
+    context = list(
+      species = "rat", has_annotation = FALSE, has_clusters = TRUE,
+      n_samples = 2L, n_cells = 500L
+    )
+  )
+  expect_true(scRDSreport:::.module_by_id(rat_with_reference, "celltype")$eligible)
 })
 
 test_that("profiles and explicit module selections retain every plan entry", {

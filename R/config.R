@@ -158,8 +158,11 @@
 #' @param modules Optional module selection. Supply module IDs, a named logical
 #'   vector, or a list with `include` and `exclude`. The downloads module is
 #'   always retained.
-#' @param annotation_mode One of `"preserve"`, `"auto"`, or `"manual"`.
-#'   Preserve is the default and never invents or overwrites annotations.
+#' @param annotation_mode One of `"auto_if_missing"`, `"preserve"`, `"auto"`,
+#'   or `"manual"`. The default preserves an annotation already stored in the
+#'   RDS and otherwise attempts a species-matched reference annotation. It
+#'   never overwrites an existing metadata column and never substitutes a
+#'   reference from another species.
 #' @param differential Differential-analysis strategy. `"auto"` selects a
 #'   replicate-aware pseudobulk method when possible and otherwise records an
 #'   explicitly exploratory fallback. Other accepted values are
@@ -181,7 +184,7 @@
 report_config <- function(
     profile = c("full", "core", "report_only"),
     modules = NULL,
-    annotation_mode = c("preserve", "auto", "manual"),
+    annotation_mode = c("auto_if_missing", "preserve", "auto", "manual"),
     differential = c("auto", "pseudobulk", "wilcox", "none"),
     trajectory_root = NULL,
     cnv_reference = NULL,
@@ -218,7 +221,11 @@ report_config <- function(
     module_options = module_options,
     limits = .normalize_report_limits(limits)
   )
-  for (id in names(module_options)) output[[id]] <- module_options[[id]]
+  for (id in names(module_options)) {
+    existing <- output[[id]]
+    if (!is.list(existing)) existing <- list()
+    output[[id]] <- utils::modifyList(existing, module_options[[id]], keep.null = TRUE)
+  }
   structure(output, class = c("scRDSreport_config", "list"))
 }
 

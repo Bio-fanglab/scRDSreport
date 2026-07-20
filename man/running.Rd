@@ -79,17 +79,21 @@ after SCP completes a raw or partial object.}
 
 \item{annotation_col}{Optional existing cell-type/annotation metadata column.
 When omitted, common annotation column names are detected automatically.
-The package never invents or overwrites cell-type annotations.}
+Existing values are never overwritten. With the default
+`annotation_mode = "auto_if_missing"`, a new species-matched SingleR column
+is attempted only when the input contains no annotation.}
 
 \item{species}{`"auto"` or one non-empty species name, such as `"human"`,
-`"mouse"`, `"rat"`, or `"zebrafish"`. Auto uses stable feature-ID
-prefixes before gene symbols. Species-specific modules run only when a
-matching resource profile is available.}
+`"mouse"`, `"rat"`, `"zebrafish"`, `"pig"`, `"cattle"`, `"chicken"`,
+`"dog"`, or `"macaque"`. Auto uses stable feature-ID prefixes before gene
+symbols. Species-specific modules run only with a matching registered or
+explicitly supplied resource; another species is never substituted.}
 
 \item{config}{A configuration created by \code{\link{report_config}()}. When omitted,
 raw/partial objects use the full profile and analyzed objects use the
 report-only profile. Explicit full profiles can add advanced modules to an
-existing analysis. Existing annotations are preserved by default.}
+existing analysis. Existing annotations always take precedence under the
+default `auto_if_missing` policy.}
 
 \item{analysis_max_cells}{Maximum cells passed to SCP. `Inf` (default) keeps
 all retained cells; a finite value creates a deterministic analysis subset

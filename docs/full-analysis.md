@@ -1,6 +1,16 @@
 # 完整分析、统计边界与资源配置
 
-本文说明 `scRDSreport` 0.2 的完整分析计划。最重要的原则是：每个章节先检查数据和生物学前提，再决定运行、部分运行或跳过。没有前提时，报告保留章节状态和原因，不用虚构注释、重复、P 值、轨迹起点或 CNV 参考来填满报告。
+本文说明 `scRDSreport` 0.3 的完整分析计划。该包是 FangLab 原 `run_scrnaseq.sh` + `scRNAseq.qmd` 中 RDS 分析与报告阶段的 R 包化增强版：保留原工作流的主要分析章节，把固定的小鼠代码扩展为九种常见物种的资源注册表，并把计算移到 Quarto 渲染之前逐模块执行。最重要的原则是：每个章节先检查数据、物种资源和生物学前提，再决定运行、部分运行或跳过。没有前提时，报告保留章节状态和原因，不用虚构注释、重复、P 值、轨迹起点或 CNV 参考来填满报告。
+
+本包的输入边界是 RDS，不是 FASTQ：
+
+```text
+FASTQ + samplesheet
+  └─ run_scrnaseq.sh / nf-core/scrnaseq / Cell Ranger → 单细胞 RDS
+       └─ scRDSreport::running() → 分析产物 + report.html
+```
+
+因此本包不调用 nf-core、Nextflow、Cell Ranger，也不负责比对和定量。上游流程产生的 Seurat、SingleCellExperiment、表达矩阵或含 counts 的 list RDS 才是 `running()` 的输入。
 
 ## 1. 一条命令和三个 profile
 
@@ -16,7 +26,7 @@ running("object.rds", "result")
 ```r
 cfg <- report_config(
   profile = "full",
-  annotation_mode = "preserve",
+  annotation_mode = "auto_if_missing",
   differential = "auto"
 )
 
@@ -36,7 +46,7 @@ running(
 | `core` | `qc`、`reduction`、`cluster`、`celltype`、`downloads` | 只需要基础分析、原注释/组成和数据导出 |
 | `report_only` | `downloads` | 输入对象已有分析，只整理和展示，不补跑 SCP 或高级分析 |
 
-`profile` 控制报告模块；`analyze = "auto"/"always"/"never"` 控制是否用 SCP 补全 raw 或 partial 对象。没有显式 `config` 时，`analyze = "auto"` 会让已分析 RDS 自动进入 `report_only`。显式传入 `profile = "full"` 才会在已有分析之上继续尝试高级模块。
+`profile` 控制报告模块；`analyze = "auto"/"always"/"never"` 控制是否用 SCP 补全 raw 或 partial 对象。没有显式 `config` 时，`analyze = "auto"` 会让已分析 RDS 自动进入 `report_only`。显式传入 `report_config(profile = "full")` 才会在已有分析之上继续尝试高级模块；只设置 `species = "mouse"` 不会绕过这一档位判断。
 
 ## 2. 12 个模块
 
@@ -47,13 +57,13 @@ running(
 | `qc` | 稀疏 counts 上的细胞/样本 QC、阈值、通过状态、QC 图 | 需要可读取的表达层；默认只记录指标，只有显式配置才按高级模块阈值修改分析对象 |
 | `reduction` | HVG/PCA 方差、PCA、UMAP、t-SNE 等已有降维的坐标与图 | raw/partial 对象可先由 SCP 补全；已有完整降维时优先保留 |
 | `cluster` | cluster 元数据、数量/比例和降维图 | 需要降维/邻居图或输入对象已有 cluster |
-| `celltype` | 原注释、细胞组成、样本组成、注释降维图 | `preserve` 需要 RDS 已有注释；`auto`/`manual` 必须由用户显式启用并具备参考资源 |
+| `celltype` | 原注释、参考/手动注释、细胞组成、样本组成、注释降维图 | 默认已有注释优先；缺失时只使用同物种可信参考。自动/手动结果写入新列，不覆盖原列 |
 | `differential` | 按 cell type/cluster 聚合的 pseudobulk、比较表、效应大小 | 需要明确的 sample、group 和分层字段；正式推断要求每组至少两个独立生物学样本 |
-| `enrichment` | GO、KEGG、GSEA/GSVA 及其表图 | 需要可用差异排序和匹配物种的 OrgDb、KEGG/基因集资源 |
+| `enrichment` | GO、KEGG、GSEA/GSVA 及其表图 | 需要可用差异排序和对应 OrgDb；人/鼠使用原生 MSigDB，其他内置非人物种明确标记 human MSigDB 正交投影 |
 | `pseudotime` | 轨迹几何、候选起点，以及有显式 root 时的 pseudotime、动态基因和富集 | 需要足够细胞和可用降维；定向结论必须由用户提供 `trajectory_root` |
 | `communication` | CellChat 网络、强度、配体受体/通路、发送者-接收者 | 需要可信细胞注释和匹配物种的 CellChat 数据库 |
-| `cell_cycle` | S/G2M 得分、phase、组成和降维图 | 需要与物种及 feature 命名匹配的 cell-cycle 基因 |
-| `tf` | TF ID 映射、平均表达、热图和摘要 | 需要匹配物种的 TF catalog/OrgDb；表达结果不是调控活性或因果推断 |
+| `cell_cycle` | S/G2M 得分、phase、组成、降维图和实际基因映射表 | 人使用 Seurat 原生 human 集合；非人默认需要 `babelgene` 产生有证据的物种正交映射 |
+| `tf` | TF ID 映射、平均表达、热图和摘要 | 默认从对应 OrgDb 的 `GOALL:GO:0003700` 建 catalog；表达结果不是调控活性或因果推断 |
 | `cnv` | inferCNV 输入、参考、信号和染色体摘要/热图 | 必须有用户指定的正常参考组和匹配 genome assembly 的 TxDb/GTF |
 | `downloads` | 原始/分析 RDS、矩阵、元数据、产物、manifest 和 session info | 始终保留 |
 
@@ -100,7 +110,9 @@ cfg <- report_config(
 以下情况是正常的可审计结果，不应视为程序偷偷漏跑：
 
 - 未选择模块：`not_requested`；
-- 没有 RDS 原始注释且使用默认 `preserve`：`celltype` 跳过或部分完成，并说明 `annotation_missing`；
+- 默认 `auto_if_missing` 找到 RDS 原始注释：直接保留，不运行 SingleR；
+- 没有原始注释且当前物种有可信参考：尝试生成独立参考注释列；参考依赖、ID overlap 或置信标签不足时保留明确原因；
+- 没有原始注释且当前物种没有注册可信参考：保留 cluster-only 上下文，`celltype` 显示 `annotation_resources_unavailable`/`needs_input`；
 - 物种无法安全识别：相应物种特异模块跳过；
 - 没有轨迹起点：`pseudotime` 只输出无方向轨迹几何和候选起点，不生成定向 pseudotime；
 - 没有正常参考组：`cnv` 显示 `cnv_reference_required`；
@@ -109,7 +121,22 @@ cfg <- report_config(
 
 ## 4. annotation_mode
 
-### 4.1 preserve：默认且推荐
+### 4.1 auto_if_missing：默认
+
+```r
+cfg <- report_config(annotation_mode = "auto_if_missing")
+running("object.rds", "result", species = "auto", config = cfg)
+```
+
+此模式先在任何过滤和分析子集之前读取输入元数据。若已有注释，则原样保存、导出和使用，不运行新的参考注释；若没有注释，则只在选定物种注册了可信参考时尝试 SingleR。当前内置参考入口是：
+
+- human：`celldex::HumanPrimaryCellAtlasData`；
+- mouse：`celldex::MouseRNAseqData`，免疫数据可显式改用 `celldex::ImmGenData`；
+- rat、zebrafish、pig、cattle、chicken、dog、macaque：没有内置可信参考，需要用户提供同物种 reference 和 labels。
+
+自动结果默认写入 `.scRDSreport_celltype_SingleR`。若该列已存在，程序拒绝覆盖；`pruned.labels` 中不确定的结果保持缺失。cluster-level SingleR 缺少可选 `scrapper` 时，小于 `max_cell_level_cells` 的对象可安全退回 cell-level SingleR，并把 `prediction_mode` 写入 provenance。若没有任何置信标签，则只导出预测表，不增加全缺失元数据列。参考名称、label 来源、置信细胞数和预测表会作为 provenance/产物保存。
+
+### 4.2 preserve：严格只使用原注释
 
 ```r
 cfg <- report_config(annotation_mode = "preserve")
@@ -129,16 +156,16 @@ running(
 4. 不覆盖已有注释，也不增加包作者自定义标签；
 5. 没找到注释时明确说明“无已有注释”。
 
-### 4.2 auto：只有显式请求才运行
+### 4.3 auto：显式生成一列参考注释
 
 ```r
 cfg <- report_config(annotation_mode = "auto")
 running("object.rds", "result_auto", species = "human", config = cfg)
 ```
 
-自动注释需要 `SingleR`、`celldex`/用户参考对象、匹配的基因 ID 映射和足够 feature overlap。任何一项不满足时会显示跳过或需要输入。自动结果应写入独立列并与原注释并列展示，不能覆盖原列。
+与 `auto_if_missing` 不同，`auto` 表示即使 RDS 已有注释，也明确请求再生成一列参考注释用于比较。自动注释需要 `SingleR`、`celldex`/用户参考对象、相应 OrgDb、匹配的基因 ID 映射和足够 feature overlap。任何一项不满足时会显示跳过或需要输入。自动结果写入独立列并与原注释并列展示，不能覆盖原列，也不能使用另一物种参考。
 
-### 4.3 manual：用户提供 marker
+### 4.4 manual：用户提供 marker
 
 ```r
 cfg <- report_config(
@@ -152,7 +179,7 @@ cfg <- report_config(
 )
 ```
 
-marker 必须来自本实验和对应物种。只设置 `manual` 而不提供 marker 时，模块显示 `manual_markers_required`，不会使用隐藏的默认 marker。
+marker 必须来自本实验和对应物种。只设置 `manual` 而不提供 marker 时，模块显示 `manual_markers_required`，不会使用隐藏的默认 marker。结果写入新的 `.scRDSreport_celltype_manual` 列。
 
 ## 5. 样本设计、重复和统计限制
 
@@ -214,30 +241,105 @@ running("object.rds", "result", sample_map = sample_map)
 running("object.rds", "result", species = "auto")
 ```
 
-程序优先使用稳定的 feature ID 前缀，再参考基因符号。符号大小写无法区分小鼠、大鼠和若干其他物种时，结果保持 `unknown`。`unknown` 不会隐式套用小鼠数据库、marker、染色体或 genome assembly。
+程序优先使用九个内置物种各自的稳定 Ensembl feature ID 前缀。只有大写 gene symbol 时无法区分人、猪、牛、狗、鸡、猕猴和其他物种，title-case symbol 也无法区分小鼠、大鼠等物种，因此结果保持 `unknown`。`unknown` 不会隐式套用人或小鼠数据库、marker、染色体或 genome assembly。
+
+显式指定物种时，用户选择控制资源；自动检测结果不会悄悄改回其他物种。若显式选择和 feature-ID 检测冲突，manifest 会保存 `conflict = TRUE` 和检查提示。
 
 ### 6.2 当前内置范围
 
 ```r
-human_resources <- species_resources("human")
+supported_species()
 mouse_resources <- species_resources("mouse")
+rat_resources <- species_resources("Rattus norvegicus")
 unknown_resources <- species_resources("unknown")
 ```
 
-| 资源字段 | human | mouse | unknown/其他未注册物种 |
-|---|---|---|---|
-| OrgDb | `org.Hs.eg.db` | `org.Mm.eg.db` | 无 |
-| KEGG code | `hsa` | `mmu` | 无 |
-| CellChat DB | human | mouse | 无 |
-| genome/TxDb | GRCh38/hg38 | GRCm38/mm10 | 无 |
-| cell-cycle/TF/gene-set strategy | 人源策略 | 鼠源策略 | `user_supplied` |
-| 自动注释入口 | human celldex reference | mouse celldex reference | 无 |
+`supported_species()` 一行一个内置物种，同时显示注册资源和当前环境中 OrgDb、TxDb、`msigdbr`、`babelgene`、SingleR/celldex、CellChat 是否实际安装。资源注册不等于依赖已安装。
 
-内置的是“资源映射”，不代表相关数据库包已安装。模块运行前仍会检查 package、基因 ID overlap 和 genome assembly。
+| tier | species | OrgDb | KEGG | assembly | MSigDB 来源 |
+|---|---|---|---|---|---|
+| `full` | human | `org.Hs.eg.db` | `hsa` | GRCh38/hg38 | human `HS` 原生库 |
+| `full` | mouse | `org.Mm.eg.db` | `mmu` | GRCm38/mm10 | mouse `MM` 原生库 |
+| `core` | rat | `org.Rn.eg.db` | `rno` | mRatBN7.2 | human `HS` → rat 正交投影 |
+| `core` | zebrafish | `org.Dr.eg.db` | `dre` | GRCz11 | human `HS` → zebrafish 正交投影 |
+| `core` | pig | `org.Ss.eg.db` | `ssc` | Sscrofa11.1 | human `HS` → pig 正交投影 |
+| `core` | cattle | `org.Bt.eg.db` | `bta` | ARS-UCD1.3 | human `HS` → cattle 正交投影 |
+| `core` | chicken | `org.Gg.eg.db` | `gga` | GRCg7b | human `HS` → chicken 正交投影 |
+| `core` | dog | `org.Cf.eg.db` | `cfa` | ROS_Cfam_1.0 | human `HS` → dog 正交投影 |
+| `core` | macaque | `org.Mmu.eg.db` | `mcc` | Mmul_10 | human `HS` → macaque 正交投影 |
 
-### 6.3 其他物种
+`full` 表示注册了可信自动注释、CellChat 和 TxDb 入口，不表示所有模块一定完成。`core` 物种仍有物种匹配的 ID/QC、OrgDb、KEGG、MSigDB 元数据、cell-cycle 和 TF 策略，但没有内置可信注释、CellChat 数据库或 TxDb。
 
-其他物种仍可执行不依赖物种数据库的读取、QC、降维、聚类和下载。高级模块需要显式覆盖资源，例如：
+### 6.3 指定小鼠后实际发生什么
+
+对于 raw/partial RDS，SCP 会先按需补齐基础分析；对于已经含有降维和 cluster/注释的 RDS，必须显式使用 `profile = "full"` 才会继续尝试高级模块：
+
+```r
+cfg_mouse <- report_config(
+  profile = "full",
+  annotation_mode = "auto_if_missing"
+)
+
+running(
+  input = "mouse_object.rds",
+  output = "mouse_result",
+  species = "mouse",
+  config = cfg_mouse
+)
+```
+
+该调用选择以下小鼠路径：
+
+- feature ID/symbol：`org.Mm.eg.db`，包括 ENSEMBL/SYMBOL/ENTREZ 映射；
+- QC：小鼠线粒体、核糖体和血红蛋白符号规则；
+- 自动注释：没有原注释时默认 `celldex::MouseRNAseqData`；已有注释时原样保留，不运行 SingleR；
+- GO/KEGG/TF：小鼠 OrgDb、`mmu` KEGG，TF catalog 优先取 `GOALL:GO:0003700`；
+- GSEA/GSVA：Mouse MSigDB 的 `db_species = "MM"`、Hallmark collection `MH`，不是运行时 human-to-mouse 投影；
+- cell cycle：用 `babelgene` 将 Seurat human S/G2M genes 映射到 `Mus musculus`，并导出每个 source/target symbol；
+- communication：有可信注释且安装 CellChat 时使用 `CellChatDB.mouse`；
+- CNV：使用 mm10 TxDb 入口，但仍要求用户指定正常 `cnv_reference`，并核对 RDS 的实际 genome build；
+- pseudotime：可以计算无方向轨迹几何，但定向 pseudotime 仍要求用户给出 `trajectory_root`。
+
+免疫数据若更适合 ImmGen，可显式替换参考：
+
+```r
+cfg_mouse_immune <- report_config(
+  profile = "full",
+  annotation_mode = "auto_if_missing",
+  module_options = list(
+    celltype = list(reference = "celldex::ImmGenData")
+  )
+)
+```
+
+若想在 RDS 已有注释时仍生成一列 SingleR 结果用于比较，把模式改成 `annotation_mode = "auto"`；原注释仍不会被覆盖。
+
+### 6.4 基因集、cell cycle 和 TF 的跨物种边界
+
+人和小鼠分别使用 `msigdbr` 的 `HS/H` 与 `MM/MH` 数据库/默认 Hallmark collection。其余七个内置非人物种使用 `db_species = "HS"`、collection `H`，由 `msigdbr` 将 human MSigDB 正交投影到目标物种。报告和下载会记录目标物种、数据库物种、collection、版本、是否投影，以及 `msigdbr` 提供时的 `db_gene_symbol`、`ortholog_sources` 和 `num_ortholog_sources`。这些结果不能写成目标物种原生 MSigDB。
+
+GO/KEGG 和 TF 依赖对应物种 OrgDb。默认 TF catalog 从 `GOALL:GO:0003700` 提取，是“该 GO term 下的 TF 基因表达摘要”，不是 TF 活性或调控因果推断。非人 cell-cycle 默认通过 `babelgene` 映射 Seurat `cc.genes.updated.2019`；小鼠在 `babelgene` 不可用时保留一个明确标记的大小写不敏感 fallback，其他物种缺少可靠 ortholog 或 assay overlap 时显示 `needs_input`。
+
+### 6.5 用户参考和未注册物种
+
+rat、zebrafish、pig、cattle、chicken、dog、macaque 没有包内可信自动注释参考。可为同物种提供 SingleR reference：
+
+```r
+cfg <- report_config(
+  profile = "full",
+  annotation_mode = "auto_if_missing",
+  module_options = list(
+    celltype = list(
+      reference = species_matched_reference,
+      reference_labels = species_matched_labels
+    )
+  )
+)
+
+running("object.rds", "result", species = "rat", config = cfg)
+```
+
+未注册物种仍可执行不依赖物种数据库的读取、QC、降维、聚类和下载。物种特异模块需要显式覆盖资源。内置或覆盖的“资源映射”都不代表相关数据库包已安装；模块运行前仍会检查 package、基因 ID overlap 和 genome assembly。例如：
 
 ```r
 cfg <- report_config(
@@ -257,7 +359,7 @@ cfg <- report_config(
 running("object.rds", "result", species = "your_species", config = cfg)
 ```
 
-资源必须与 feature ID 和 genome assembly 一致。给出 OrgDb 并不会自动补齐 CellChat、轨迹、CNV 和基因集资源；每个模块会独立报告是否可运行。不要把本文的人/鼠示例直接用于其他物种。
+资源必须与 feature ID 和 genome assembly 一致。给出 OrgDb 并不会自动补齐 CellChat、自动注释、CNV 坐标和基因集资源；每个模块会独立报告是否可运行。程序不会借用人或小鼠数据库作为静默替代。
 
 ## 7. trajectory_root
 
@@ -407,16 +509,20 @@ output/
 | 层/模块 | 主要包 |
 |---|---|
 | 核心读取、SCP、报告和下载 | `Seurat`、`SeuratObject`、`SCP`、`Matrix`、`BiocParallel`、`DT`、`ggplot2`、`ggsci`、`quarto`、`knitr`、`htmltools`、`jsonlite`、`digest` |
-| 自动注释 | `SingleR`、`celldex`、`AnnotationDbi`、对应 `org.*.eg.db` |
+| 自动注释 | `SingleR`、`celldex`、`AnnotationDbi`、对应 `org.*.eg.db`；包内可信参考入口当前仅 human/mouse |
 | 重复感知差异 | `edgeR` |
-| 富集/基因集 | `clusterProfiler`、`enrichplot`、`GSVA`、`ComplexHeatmap`、对应 OrgDb |
+| GO/KEGG | `clusterProfiler`、`enrichplot`、对应物种 OrgDb |
+| MSigDB/GSEA/GSVA | `msigdbr`、`GSVA`、`ComplexHeatmap`；非人非鼠内置物种使用 human MSigDB 正交投影 |
 | 轨迹 | `monocle3`、`igraph`，必要时 `SeuratWrappers` |
-| 通讯 | `CellChat`、`circlize`、`ComplexHeatmap` |
-| TF/热图 | `AnnotationDbi`、对应 OrgDb、`ComplexHeatmap` |
+| 通讯 | `CellChat`、`circlize`、`ComplexHeatmap`；内置 DB 当前仅 human/mouse |
+| cell cycle | Seurat `cc.genes.updated.2019`；非人物种另需 `babelgene` |
+| TF/热图 | `AnnotationDbi`、对应 OrgDb 的 `GOALL:GO:0003700`、`ComplexHeatmap` |
 | CNV | `infercnv`、`GenomicFeatures`、匹配的 TxDb/GTF |
 | 可选交互图和数据整理 | `plotly`、`htmlwidgets`、`data.table`、`dplyr`、`tidyr`、`stringr`、`ggrepel`、`scales`、`future` |
 
-可选依赖缺失不会触发静默替代。例如没有 `edgeR` 时不会伪造 edgeR P 值，没有 `CellChat` 数据库时不会生成通讯网络，没有 `infercnv` 或参考组时不会生成 CNV 热图。报告应把这些情况作为状态和原因呈现。
+九个 OrgDb 分别是 `org.Hs.eg.db`、`org.Mm.eg.db`、`org.Rn.eg.db`、`org.Dr.eg.db`、`org.Ss.eg.db`、`org.Bt.eg.db`、`org.Gg.eg.db`、`org.Cf.eg.db` 和 `org.Mmu.eg.db`，用户只需安装本次物种对应的包。
+
+可选依赖缺失不会触发静默替代。例如没有 `edgeR` 时不会伪造 edgeR P 值；没有 `babelgene` 时，除明确记录的小鼠大小写不敏感 fallback 外，其他非人物种不会直接借用 human cell-cycle 集合；没有 CellChat 数据库时不会生成通讯网络；没有 `infercnv` 或参考组时不会生成 CNV 热图。报告应把这些情况作为状态和原因呈现。
 
 ## 13. 发布前最小核对
 
@@ -425,10 +531,11 @@ output/
 1. `report.html` 能在断网环境打开；
 2. manifest 中 12 个模块都存在，未运行模块有原因；
 3. sample design 与真实实验设计一致，`needs_review` 已处理；
-4. species、OrgDb 和 genome assembly 匹配；
-5. 原注释未被覆盖，自动/手动注释有单独来源列；
-6. 表达矩阵是 feature × cell，features/barcodes 顺序一致；
-7. 差异分析的统计单位是生物学样本；无重复结果没有正式 P 值；
-8. pseudotime 起点和 CNV reference 有生物学依据；
-9. 分析子集、图形抽样和完整下载的边界写入报告；
-10. 大文件是 HTML 内置还是 output 文件，交付方式与报告一致。
+4. species、OrgDb、KEGG code 和 genome assembly 匹配，显式 species 与 feature-ID 检测没有未处理冲突；
+5. 原注释未被覆盖，reference/manual 注释有独立列和来源；无参考物种没有被跨物种代替；
+6. MSigDB 结果已区分 native database 与 ortholog projection，并保存数据库版本和映射证据；
+7. 表达矩阵是 feature × cell，features/barcodes 顺序一致；
+8. 差异分析的统计单位是生物学样本；无重复结果没有正式 P 值；
+9. pseudotime 起点和 CNV reference 有生物学依据；
+10. 分析子集、图形抽样和完整下载的边界写入报告；
+11. 大文件是 HTML 内置还是 output 文件，交付方式与报告一致；FASTQ 比对/定量版本属于上游 provenance，不能写成本包完成。
