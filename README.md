@@ -19,6 +19,8 @@ running(
 
 默认 `annotation_mode = "auto_if_missing"`：RDS 已有注释时原样保留；没有注释时，只在当前物种注册了可信参考时尝试参考注释。自动结果写入独立列，不覆盖原始元数据，也不会拿另一个物种的参考填充。样本设计、轨迹起点和 CNV 正常参考仍不会被擅自猜测。
 
+完整档默认尽量为每个章节给出可解释结果，但不会为了“有图有表”制造统计结论：没有可靠生物学重复时，差异模块按注释或 cluster 输出有数量上限的 one-vs-rest 描述性效应量和基因排序，不生成 P 值/FDR；富集模块可据此输出基因集方向与效应摘要，不声称显著性；没有轨迹起点、CellChat 推断条件或 CNV 正常参考时，分别只输出无方向几何、分组/诊断信息或 readiness 表。
+
 ## 与 FASTQ/nf-core 流程的边界
 
 原 `run_scrnaseq.sh` 包含 FASTQ 到表达矩阵的上游流程，本包从 RDS 开始：
@@ -171,6 +173,8 @@ running(
 
 每个比较组至少有两个独立生物学样本时，`differential = "auto"` 才能进行重复感知的 pseudobulk 推断。没有生物学重复时，细胞不能冒充重复：报告最多给出描述性表达量和效应大小，不制造 P 值。显式选择 cell-level Wilcoxon 的结果也只能作为探索性结果解释。
 
+默认描述性兜底还会优先使用对象中可信的注释列，其次使用 cluster，生成 one-vs-rest marker 排序和效应量图；默认最多展示 20 个组，样本层比较最多 6 个，避免组数较多时产生平方级结果。需要改变这些限制时，可在 `module_options$differential` 中设置 `fallback_grouping`、`run_group_markers`、`max_marker_groups` 和 `max_contrasts`。
+
 ## 物种和资源
 
 `species = "auto"` 会优先根据稳定 feature ID 前缀识别物种；只有大写 gene symbol 时无法区分人、猪、牛、狗、鸡和猕猴，因此保持 `unknown`，不会武断地套用人或小鼠资源。显式指定物种时，该选择控制资源，自动检测结果和冲突提示仍会写入 manifest。
@@ -247,13 +251,16 @@ running("rat.rds", "rat_result", species = "rat", config = cfg_rat)
 cfg <- report_config(
   profile = "full",
   trajectory_root = "Y_1",                 # Monocle principal node
-  cnv_reference = c("T_cell", "B_cell")  # 注释列中的正常参考组
+  cnv_reference = c("T_cell", "B_cell"),  # 注释列中的正常参考组
+  module_options = list(
+    cnv = list(object_genome_assembly = "GRCm38/mm10")
+  )
 )
 
-running("object.rds", "result", config = cfg)
+running("mouse_object.rds", "result", species = "mouse", config = cfg)
 ```
 
-未提供 `trajectory_root` 时，轨迹模块最多输出无方向的轨迹几何和候选起点，不生成定向 pseudotime 或动态基因结论；未提供 `cnv_reference` 时，`cnv` 章节显示 `cnv_reference_required`。程序不会悄悄选择起点或正常参考组。
+未提供 `trajectory_root` 时，轨迹模块最多输出无方向的轨迹几何和候选起点，不生成定向 pseudotime 或动态基因结论；未提供 `cnv_reference` 时，`cnv` 章节显示 `cnv_reference_required`，并可附带输入就绪情况，但绝不生成 CNV 信号。即使选择了物种和正常参考，内置 TxDb 也只有在 `object_genome_assembly` 与注册版本匹配，或用户核验后显式设置 `genome_assembly_confirmed = TRUE` 时才会用于推断；也可以直接提供与对象匹配的 `gene_order`、`gtf` 或 `txdb`。程序不会悄悄选择起点、正常参考组或基因组版本。
 
 ## 超大 raw 对象
 
@@ -287,7 +294,7 @@ running(
 
 ## 单文件 HTML 和下载
 
-页面样式、图形、DT 表格与脚本内置在 `report.html`，因此报告离线可打开。下载文件有三种策略：
+页面样式、图形、DT 表格与脚本内置在 `report.html`，因此报告离线可打开。左侧目录默认完整展开；结果表继续使用 DT 的搜索、复制、CSV 和 Excel 控件。完整文件索引的说明列采用固定高度的独立滚动区域，避免长说明把整行撑得过高。下载文件有三种策略：
 
 ```r
 # 默认：在预算内优先把模块结果、注释和说明表内置到 HTML

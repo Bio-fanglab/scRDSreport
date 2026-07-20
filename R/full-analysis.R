@@ -10,7 +10,7 @@ utils::globalVariables(c(
   "Phase", "score_value", "fraction", "cluster", "n_cells",
   "mean_absolute_cnv_signal", "target", "interaction_weight", "value",
   "nCount", "nFeature", "pass", "color_value", "group", "symbol",
-  "z_expression"
+  "z_expression", "plot_feature", "logFC", "direction"
 ))
 
 .fa_module_aliases <- function(id) {
@@ -83,7 +83,7 @@ utils::globalVariables(c(
     ),
     cnv = c(
       "gene_order", "gtf", "txdb", "orgdb", "feature_keytype",
-      "symbol_column"
+      "symbol_column", "genome_assembly"
     ),
     character()
   )
@@ -147,6 +147,19 @@ utils::globalVariables(c(
   as.character(utils::packageVersion(package))
 }
 
+.fa_engine_version <- function(engine) {
+  if (is.null(engine) || !length(engine) || is.na(engine[[1L]]) || !nzchar(engine[[1L]])) {
+    return(NA_character_)
+  }
+  packages <- trimws(unlist(strsplit(as.character(engine[[1L]]), "[/+]"), use.names = FALSE))
+  packages <- unique(sub("::.*$", "", packages[nzchar(packages)]))
+  versions <- vapply(packages, .fa_package_version, character(1))
+  available <- !is.na(versions) & nzchar(versions)
+  if (!any(available)) return(NA_character_)
+  if (length(packages) == 1L) return(unname(versions[[1L]]))
+  paste0(packages[available], "=", versions[available], collapse = "; ")
+}
+
 .fa_default_assay <- function(object) {
   value <- tryCatch(SeuratObject::DefaultAssay(object), error = function(e) NULL)
   if (is.null(value) || !length(value) || !nzchar(value[[1L]])) {
@@ -190,6 +203,7 @@ utils::globalVariables(c(
     cellchat = public$cellchat_db,
     txdb = public$txdb,
     gtf = public$gtf,
+    genome_assembly = public$genome_assembly,
     gene_sets = public$gene_sets,
     gene_sets_strategy = public$gene_sets_strategy,
     msigdbr_species = public$msigdbr_species,
@@ -384,6 +398,9 @@ utils::globalVariables(c(
     if (grepl("p_val_adj|padj|fdr", lname)) return("Multiple-testing adjusted P value.")
     if (grepl("p_val|pvalue|p.value", lname)) return("Unadjusted P value.")
     if (grepl("logfc|log2fc|fold", lname)) return("Log2 fold change for the stated contrast.")
+    if (grepl("^pooled_cpm_group_[ab]$", lname)) {
+      return("Counts pooled within the named contrast group and normalized to counts per million; this is not an arithmetic mean of sample-level CPM values.")
+    }
     if (grepl("fraction|proportion|percent|pct", lname)) return("Fraction, proportion, or percentage defined by the column name.")
     if (grepl("count|cells|n_", lname)) return("Count defined by the column name.")
     if (grepl("reason", lname)) return("Machine-readable explanation for this row or decision.")
@@ -561,7 +578,6 @@ utils::globalVariables(c(
   if (is.null(result$object)) result$object <- object
   if (is.null(result$artifacts)) result$artifacts <- list()
   finished <- Sys.time()
-  engine_package <- if (!is.null(result$engine)) sub("::.*$", "", result$engine) else NULL
   module <- list(
     id = id,
     requested = requested,
@@ -570,7 +586,7 @@ utils::globalVariables(c(
     reason_code = result$reason_code,
     message = result$message,
     engine = result$engine,
-    engine_version = if (!is.null(engine_package)) .fa_package_version(engine_package) else NA_character_,
+    engine_version = .fa_engine_version(result$engine),
     parameters = .fa_sanitize_config(cfg),
     seed = as.integer(seed),
     started_at = format(started, "%Y-%m-%dT%H:%M:%S%z"),
@@ -1027,7 +1043,14 @@ utils::globalVariables(c(
     fields <- strsplit(reference, "::", fixed = TRUE)[[1L]]
     loader <- if (length(fields) == 2L) .fa_pkg_fun(fields[[1L]], fields[[2L]]) else NULL
     if (is.null(loader)) return(NULL)
-    return(tryCatch(loader(), error = function(e) NULL))
+    loaded <- tryCatch(loader(), error = function(e) e)
+    if (inherits(loaded, "error")) {
+      return(structure(
+        list(reference = reference, message = conditionMessage(loaded)),
+        class = "scRDSreport_reference_load_error"
+      ))
+    }
+    return(loaded)
   }
   if (!is.null(reference) && !is.character(reference)) return(reference)
   if (!is.null(reference)) return(NULL)
@@ -1041,7 +1064,14 @@ utils::globalVariables(c(
   if (is.null(function_name)) return(NULL)
   loader <- .fa_pkg_fun("celldex", function_name)
   if (is.null(loader)) return(NULL)
-  tryCatch(loader(), error = function(e) NULL)
+  loaded <- tryCatch(loader(), error = function(e) e)
+  if (inherits(loaded, "error")) {
+    return(structure(
+      list(reference = paste0("celldex::", function_name), message = conditionMessage(loaded)),
+      class = "scRDSreport_reference_load_error"
+    ))
+  }
+  loaded
 }
 
 .fa_apply_manual_annotation <- function(object, cfg, cluster_column) {
@@ -1132,6 +1162,17 @@ utils::globalVariables(c(
                 reason = "dependency_missing", message = "SingleR is not installed."))
   }
   reference <- .fa_load_annotation_reference(species, cfg)
+  if (inherits(reference, "scRDSreport_reference_load_error")) {
+    return(list(
+      object = object, column = NULL, predictions = NULL,
+      reason = "reference_load_failed",
+      message = paste0(
+        "The annotation reference '", reference$reference,
+        "' could not be loaded: ", reference$message,
+        ". Check network access and that the Bioconductor/gypsum cache is writable."
+      )
+    ))
+  }
   if (is.null(reference)) {
     return(list(
       object = object, column = NULL, predictions = NULL, reason = "reference_missing",
@@ -1248,7 +1289,8 @@ utils::globalVariables(c(
   if (output_column %in% names(meta)) {
     return(list(object = object, column = NULL, predictions = prediction_table,
                 reason = "output_column_exists",
-                message = paste0("Refusing to overwrite existing metadata column '", output_column, "'.")))
+                message = paste0("Refusing to overwrite existing metadata column '", output_column, "'."),
+                provenance = provenance))
   }
   annotation <- data.frame(cell_labels, row.names = rownames(meta), check.names = FALSE)
   names(annotation) <- output_column
@@ -1262,6 +1304,27 @@ utils::globalVariables(c(
     ),
     provenance = provenance
   )
+}
+
+.fa_prediction_row_unit <- function(mode, prediction_table, provenance = NULL,
+                                    cluster_column = NULL, cell_names = character()) {
+  if (identical(mode, "manual")) {
+    return(if (!is.null(cluster_column) && length(cluster_column)) "cluster" else "cell")
+  }
+  prediction_mode <- as.character(provenance$prediction_mode %||% character())
+  prediction_mode <- prediction_mode[!is.na(prediction_mode) & nzchar(prediction_mode)]
+  if (length(prediction_mode)) {
+    if (startsWith(prediction_mode[[1L]], "cell_level")) return("cell")
+    if (startsWith(prediction_mode[[1L]], "cluster_level")) return("cluster")
+  }
+  prediction_ids <- if ("prediction_id" %in% names(prediction_table)) {
+    as.character(prediction_table$prediction_id)
+  } else {
+    rownames(prediction_table)
+  }
+  prediction_ids <- prediction_ids[!is.na(prediction_ids) & nzchar(prediction_ids)]
+  if (length(prediction_ids) && length(cell_names) && all(prediction_ids %in% cell_names)) return("cell")
+  if (!is.null(cluster_column) && length(cluster_column)) "cluster" else "cell"
 }
 
 .fa_module_celltype <- function(object, output, cfg, seed, verbose, species) {
@@ -1321,6 +1384,10 @@ utils::globalVariables(c(
     )
   }
   if (!is.null(prediction_table) && nrow(prediction_table)) {
+    prediction_row_unit <- .fa_prediction_row_unit(
+      mode, prediction_table, annotation_provenance,
+      cluster_column = cluster_column, cell_names = rownames(meta)
+    )
     artifacts[[length(artifacts) + 1L]] <- .fa_write_table_artifact(
       prediction_table, output, "celltype",
       if (identical(mode, "manual")) "manual_marker_scores" else "singler_predictions",
@@ -1330,7 +1397,7 @@ utils::globalVariables(c(
       } else {
         "One row per tested cell or cluster. Labels and scores are retained exactly from SingleR."
       },
-      if (!is.null(cluster_column)) "cluster" else "cell"
+      prediction_row_unit
     )
   }
 
@@ -1541,8 +1608,8 @@ utils::globalVariables(c(
   cpm_b <- 1e6 * group_b_sum / max(sum(group_b_sum), 1)
   data.frame(
     feature = rownames(pseudobulk),
-    mean_cpm_group_a = as.numeric(cpm_a),
-    mean_cpm_group_b = as.numeric(cpm_b),
+    pooled_cpm_group_a = as.numeric(cpm_a),
+    pooled_cpm_group_b = as.numeric(cpm_b),
     logFC = log2((as.numeric(cpm_b) + 0.5) / (as.numeric(cpm_a) + 0.5)),
     stringsAsFactors = FALSE
   )
@@ -1606,6 +1673,47 @@ utils::globalVariables(c(
   result
 }
 
+.fa_descriptive_de_plot <- function(result, title, top_n = 30L) {
+  if (!is.data.frame(result) || !nrow(result) ||
+      !all(c("feature", "logFC") %in% names(result))) return(NULL)
+  keep <- is.finite(result$logFC) & !is.na(result$feature) & nzchar(as.character(result$feature))
+  table <- result[keep, , drop = FALSE]
+  if (!nrow(table)) return(NULL)
+  table <- table[order(abs(table$logFC), decreasing = TRUE), , drop = FALSE]
+  table <- utils::head(table, max(1L, as.integer(top_n)))
+  table <- table[order(table$logFC), , drop = FALSE]
+  table$plot_feature <- factor(as.character(table$feature), levels = as.character(table$feature))
+  table$direction <- factor(ifelse(table$logFC >= 0, "higher in group B", "higher in group A"))
+  ggplot2::ggplot(table, ggplot2::aes(x = logFC, y = plot_feature, color = direction)) +
+    ggplot2::geom_vline(xintercept = 0, color = "#9AA6B2", linewidth = 0.35) +
+    ggplot2::geom_segment(
+      ggplot2::aes(x = 0, xend = logFC, yend = plot_feature),
+      linewidth = 0.45, alpha = 0.72
+    ) +
+    ggplot2::geom_point(size = 1.8) +
+    ggplot2::scale_color_manual(values = c(
+      "higher in group A" = "#0072B2", "higher in group B" = "#D55E00"
+    )) +
+    ggplot2::labs(
+      x = "Descriptive log2 fold change (group B / group A)", y = NULL,
+      color = NULL, title = title,
+      subtitle = "Ranked effect sizes only; no significance test or P value is implied"
+    ) +
+    ggplot2::theme_bw(base_size = 10) +
+    ggplot2::theme(legend.position = "top", panel.grid.major.y = ggplot2::element_blank())
+}
+
+.fa_grouping_candidate <- function(meta, candidates, cells) {
+  candidates <- unique(candidates[!is.na(candidates) & nzchar(candidates)])
+  for (column in candidates) {
+    if (!column %in% names(meta)) next
+    values <- as.character(meta[cells, column])
+    levels <- unique(values[!is.na(values) & nzchar(values)])
+    if (length(levels) >= 2L) return(column)
+  }
+  NULL
+}
+
 .fa_module_differential <- function(object, output, cfg, seed, verbose) {
   strategy <- tolower(as.character(cfg$strategy %||% "auto"))
   wilcox_requested <- identical(strategy, "wilcox")
@@ -1621,15 +1729,33 @@ utils::globalVariables(c(
   meta <- .seurat_metadata(object)
   sample_column <- .fa_sample_column(object, cfg)
   group_column <- .fa_group_column(object, cfg)
-  if (is.null(group_column) || (!wilcox_requested && is.null(sample_column))) {
+  requested_group_column <- group_column
+  if (is.null(group_column) || is.null(.fa_grouping_candidate(meta, group_column, colnames(counts)))) {
+    fallback_order <- as.character(cfg$fallback_grouping %||% c("group", "annotation", "cluster"))
+    fallback_candidates <- character()
+    if ("annotation" %in% fallback_order) {
+      fallback_candidates <- c(fallback_candidates, .fa_annotation_column(object, cfg))
+    }
+    if ("cluster" %in% fallback_order) {
+      fallback_candidates <- c(fallback_candidates, .fa_cluster_column(object, cfg))
+    }
+    group_column <- .fa_grouping_candidate(meta, fallback_candidates, colnames(counts))
+  }
+  if (is.null(group_column)) {
     return(.fa_result(
       object, "needs_input", "sample_or_group_missing",
-      if (wilcox_requested) {
-        "The explicitly requested Wilcoxon analysis needs a per-cell group column. A sample column is recommended but is not required for this exploratory cell-level test."
-      } else {
-        "Differential analysis needs explicit per-cell sample and group columns. Automatic names are not sufficient when these fields are absent."
-      }
+      paste(
+        "Differential analysis needs at least two values in an experimental-group,",
+        "annotation, or cluster column. No grouping with two levels was found."
+      )
     ))
+  }
+  grouping_source <- if (identical(group_column, requested_group_column)) {
+    "group"
+  } else if (identical(group_column, .fa_annotation_column(object, cfg))) {
+    "annotation_fallback"
+  } else {
+    "cluster_fallback"
   }
   sample_id <- if (!is.null(sample_column)) {
     as.character(meta[colnames(counts), sample_column])
@@ -1639,7 +1765,7 @@ utils::globalVariables(c(
   group_id <- as.character(meta[colnames(counts), group_column])
   valid_group <- !is.na(group_id) & nzchar(group_id)
   valid_sample <- !is.na(sample_id) & nzchar(sample_id)
-  valid <- valid_group & (wilcox_requested | valid_sample)
+  valid <- valid_group
   review_flags <- rep(FALSE, ncol(counts))
   if (identical(group_column, ".scRDSreport_group")) {
     review_column <- ".scRDSreport_design_needs_review"
@@ -1651,16 +1777,18 @@ utils::globalVariables(c(
     review_flags[is.na(review_flags)] <- TRUE
   }
   design_review_required <- !wilcox_requested && any(review_flags[valid])
+  ambiguous <- character()
   if (!wilcox_requested) {
-    sample_group_sets <- tapply(group_id[valid], sample_id[valid], function(x) unique(x))
-    ambiguous <- names(sample_group_sets)[vapply(sample_group_sets, length, integer(1)) != 1L]
-    if (length(ambiguous)) {
-      return(.fa_result(
-        object, "needs_input", "sample_maps_to_multiple_groups",
-        paste0("Each biological sample must map to one group. Ambiguous samples: ", paste(ambiguous, collapse = ", "), ".")
-      ))
+    sample_valid <- valid & valid_sample
+    if (any(sample_valid)) {
+      sample_group_sets <- tapply(group_id[sample_valid], sample_id[sample_valid], function(x) {
+        unique(x[!is.na(x) & nzchar(x)])
+      })
+      ambiguous <- names(sample_group_sets)[vapply(sample_group_sets, length, integer(1)) != 1L]
     }
   }
+  descriptive_cell_groups <- !wilcox_requested &&
+    (is.null(sample_column) || !any(valid_sample & valid) || length(ambiguous) > 0L)
   strata_column <- cfg$strata_column
   if (isTRUE(cfg$by_annotation) && is.null(strata_column)) strata_column <- .fa_annotation_column(object, cfg)
   strata <- if (!is.null(strata_column) && strata_column %in% names(meta)) {
@@ -1670,6 +1798,12 @@ utils::globalVariables(c(
   }
   strata[is.na(strata) | !nzchar(strata)] <- "unlabeled"
   stratum_levels <- sort(unique(strata[valid]))
+  if (!wilcox_requested && !identical(grouping_source, "group") &&
+      !isTRUE(cfg$pairwise_annotation_clusters)) {
+    # Annotation/cluster fallbacks use bounded one-vs-rest summaries below;
+    # all-pairs output is intentionally avoided because it grows quadratically.
+    stratum_levels <- character()
+  }
   max_strata <- as.integer(cfg$max_strata %||% 50L)
   if (length(stratum_levels) > max_strata) stratum_levels <- stratum_levels[seq_len(max_strata)]
   artifacts <- list()
@@ -1679,12 +1813,14 @@ utils::globalVariables(c(
   any_exploratory <- FALSE
   any_wilcox <- FALSE
   any_descriptive <- FALSE
+  marker_grouping_column <- NULL
   for (stratum in stratum_levels) {
     cell_keep <- valid & strata == stratum
+    if (!wilcox_requested && !descriptive_cell_groups) cell_keep <- cell_keep & valid_sample
     if (sum(cell_keep) < as.integer(cfg$min_cells_per_stratum %||% 20L)) next
     matrix <- counts[, cell_keep, drop = FALSE]
     cell_groups <- stats::setNames(group_id[cell_keep], colnames(matrix))
-    if (wilcox_requested) {
+    if (wilcox_requested || descriptive_cell_groups) {
       pseudobulk <- NULL
       sample_groups <- NULL
       contrasts <- .fa_contrasts(cell_groups, cfg)
@@ -1699,7 +1835,7 @@ utils::globalVariables(c(
       contrasts <- .fa_contrasts(sample_groups, cfg)
     }
     if (!nrow(contrasts)) next
-    if (!wilcox_requested) {
+    if (!wilcox_requested && !descriptive_cell_groups) {
       bundle_name <- paste0("pseudobulk_counts_", stratum)
       artifacts <- c(artifacts, .fa_write_sparse_bundle(
         pseudobulk, output, "differential", bundle_name,
@@ -1754,6 +1890,24 @@ utils::globalVariables(c(
           any_wilcox <- TRUE
         }
         group_counts <- sample_counts
+      } else if (descriptive_cell_groups) {
+        result <- .fa_exploratory_contrast(matrix, cell_groups, contrast$group_a, contrast$group_b)
+        result$analysis_note <- paste(
+          "Descriptive cell-group aggregation was used because a replicate-aware",
+          "sample-to-condition design was unavailable or the selected grouping varies within samples.",
+          "No P value was calculated."
+        )
+        analysis_type <- "exploratory_cell_group_effect_size"
+        inferential <- FALSE
+        any_descriptive <- TRUE
+        if (!is.null(sample_column)) {
+          group_counts <- vapply(c(contrast$group_a, contrast$group_b), function(group) {
+            length(unique(sample_id[cell_keep & group_id == group & valid_sample]))
+          }, integer(1))
+          names(group_counts) <- c(contrast$group_a, contrast$group_b)
+        } else {
+          group_counts <- stats::setNames(c(NA_integer_, NA_integer_), c(contrast$group_a, contrast$group_b))
+        }
       } else {
         group_counts <- table(sample_groups[sample_groups %in% c(contrast$group_a, contrast$group_b)])
         has_replicates <- length(group_counts) == 2L && all(group_counts >= 2L)
@@ -1818,14 +1972,116 @@ utils::globalVariables(c(
         } else if (identical(analysis_type, "exploratory_cell_level_wilcox")) {
           "One row per tested feature. Seurat's Wilcoxon test was explicitly requested and treats cells as statistical units; its P values are exploratory because cells do not replace biological replicates."
         } else {
-          "One row per feature. No valid biological replication was available, so only descriptive CPM and log2 fold change are reported; no P value was manufactured."
+          "One row per feature. No valid biological replication was available, so only descriptive pooled CPM and log2 fold change are reported; no P value was manufactured."
         },
         "feature-contrast record",
         list(
-          analysis_type = "pseudobulk_edgeR_QL is replicate-aware inference; exploratory_cell_level_wilcox is an explicitly requested cell-level test; exploratory_effect_size_only has no formal test.",
+          analysis_type = "pseudobulk_edgeR_QL is replicate-aware inference; exploratory_cell_level_wilcox is an explicitly requested cell-level test; exploratory_effect_size_only and exploratory_cell_group_effect_size contain no formal test.",
           statistical_unit = "Unit used by the method: biological_sample for pseudobulk, cell for explicitly requested Wilcoxon, or none_descriptive when no significance test was run."
         )
       )
+      effect_plot <- .fa_descriptive_de_plot(
+        result,
+        paste("Feature effect sizes", stratum, contrast$name),
+        top_n = cfg$effect_plot_top_n %||% 30L
+      )
+      if (!is.null(effect_plot)) {
+        artifacts <- c(artifacts, .fa_write_plot_artifacts(
+          effect_plot, output, "differential", paste0("effect_sizes_", key),
+          paste("Feature effect sizes", stratum, contrast$name),
+          paste(
+            "Features with the largest absolute log2 fold changes for this contrast.",
+            "This effect-size view does not imply statistical significance; consult analysis_type."
+          ),
+          width = 8, height = max(5, min(11, 0.22 * min(nrow(result), as.integer(cfg$effect_plot_top_n %||% 30L)) + 2.5))
+        ))
+      }
+    }
+  }
+  if (!any_inferential && !wilcox_requested && isTRUE(cfg$run_group_markers %||% TRUE)) {
+    marker_grouping_column <- .fa_grouping_candidate(
+      meta,
+      c(.fa_annotation_column(object, cfg), .fa_cluster_column(object, cfg)),
+      colnames(counts)
+    )
+    if (!is.null(marker_grouping_column)) {
+      marker_groups <- as.character(meta[colnames(counts), marker_grouping_column])
+      group_sizes <- sort(table(marker_groups[!is.na(marker_groups) & nzchar(marker_groups)]), decreasing = TRUE)
+      minimum_group_cells <- as.integer(cfg$min_cells_per_marker_group %||% 10L)
+      group_sizes <- group_sizes[group_sizes >= minimum_group_cells]
+      max_marker_groups <- as.integer(cfg$max_marker_groups %||% 25L)
+      if (length(group_sizes) > max_marker_groups) group_sizes <- group_sizes[seq_len(max_marker_groups)]
+      for (j in seq_along(group_sizes)) {
+        marker_group <- names(group_sizes)[[j]]
+        marker_valid <- !is.na(marker_groups) & nzchar(marker_groups)
+        marker_binary <- ifelse(marker_groups == marker_group, marker_group, "all_other_groups")
+        marker_binary[!marker_valid] <- NA_character_
+        if (sum(marker_binary == "all_other_groups", na.rm = TRUE) < minimum_group_cells) next
+        result <- .fa_exploratory_contrast(
+          counts[, marker_valid, drop = FALSE],
+          marker_binary[marker_valid],
+          "all_other_groups", marker_group
+        )
+        result$analysis_note <- paste0(
+          "Exploratory one-vs-rest marker effect sizes from metadata column '",
+          marker_grouping_column,
+          "'. Cells were aggregated for descriptive expression only; no P value was calculated."
+        )
+        result$stratum <- paste0("one_vs_rest:", marker_grouping_column)
+        result$contrast <- paste(marker_group, "vs all other groups")
+        result$group_a <- "all_other_groups"
+        result$group_b <- marker_group
+        result$statistical_unit <- "none_descriptive"
+        result$analysis_type <- "exploratory_one_vs_rest_effect_size"
+        if (!is.null(sample_column)) {
+          result$n_samples_group_a <- length(unique(sample_id[marker_valid & marker_binary == "all_other_groups" & valid_sample]))
+          result$n_samples_group_b <- length(unique(sample_id[marker_valid & marker_binary == marker_group & valid_sample]))
+        } else {
+          result$n_samples_group_a <- NA_integer_
+          result$n_samples_group_b <- NA_integer_
+        }
+        result$n_cells_group_a <- sum(marker_binary == "all_other_groups", na.rm = TRUE)
+        result$n_cells_group_b <- sum(marker_binary == marker_group, na.rm = TRUE)
+        key <- paste0("one_vs_rest__", .safe_name(marker_grouping_column), "__", .safe_name(marker_group))
+        all_results[[key]] <- result
+        contrast_registry[[length(contrast_registry) + 1L]] <- data.frame(
+          stratum = result$stratum[[1L]], contrast = result$contrast[[1L]],
+          group_a = "all_other_groups", group_b = marker_group,
+          n_samples_group_a = as.integer(result$n_samples_group_a[[1L]]),
+          n_samples_group_b = as.integer(result$n_samples_group_b[[1L]]),
+          n_cells_group_a = as.integer(result$n_cells_group_a[[1L]]),
+          n_cells_group_b = as.integer(result$n_cells_group_b[[1L]]),
+          analysis_type = "exploratory_one_vs_rest_effect_size",
+          stringsAsFactors = FALSE
+        )
+        artifacts[[length(artifacts) + 1L]] <- .fa_write_table_artifact(
+          result, output, "differential", paste0("de_", key),
+          paste("Exploratory markers", marker_group, "vs all other groups"),
+          paste0(
+            "One row per feature for a descriptive one-vs-rest marker contrast based on '",
+            marker_grouping_column,
+            "'. Pooled CPM and log2 fold change are provided without a formal test or P value."
+          ),
+          "feature-marker contrast",
+          list(
+            analysis_type = "exploratory_one_vs_rest_effect_size contains descriptive expression effects only.",
+            statistical_unit = "none_descriptive means that no unit was treated as an independent replicate for significance testing."
+          )
+        )
+        effect_plot <- .fa_descriptive_de_plot(
+          result, paste("Exploratory markers", marker_group, "vs all other groups"),
+          top_n = cfg$effect_plot_top_n %||% 30L
+        )
+        if (!is.null(effect_plot)) artifacts <- c(artifacts, .fa_write_plot_artifacts(
+          effect_plot, output, "differential", paste0("effect_sizes_", key),
+          paste("Exploratory markers", marker_group, "vs all other groups"),
+          "Largest one-vs-rest expression effect sizes. No significance test or biological-replicate claim is implied.",
+          width = 8,
+          height = max(5, min(11, 0.22 * min(nrow(result), as.integer(cfg$effect_plot_top_n %||% 30L)) + 2.5))
+        ))
+        any_exploratory <- TRUE
+        any_descriptive <- TRUE
+      }
     }
   }
   if (!length(all_results)) {
@@ -1866,11 +2122,10 @@ utils::globalVariables(c(
     }
   }
   object <- .fa_store_analysis_misc(object, "differential_rankings", rankings)
-  status <- if (design_review_required && !wilcox_requested && !any_inferential) {
-    "needs_input"
-  } else if ((any_inferential && any_exploratory) ||
+  status <- if ((any_inferential && any_exploratory) ||
                 (any_wilcox && any_descriptive) ||
-                (wilcox_requested && !any_wilcox)) "partial" else "completed"
+                (wilcox_requested && !any_wilcox) ||
+                (!any_inferential && !any_wilcox)) "partial" else "completed"
   reason <- if (wilcox_requested && !any_wilcox) {
     "wilcox_failed_descriptive_only"
   } else if (any_wilcox && any_descriptive) {
@@ -1881,8 +2136,10 @@ utils::globalVariables(c(
     "mixed_inferential_and_exploratory"
   } else if (any_inferential) {
     "replicate_aware_pseudobulk_completed"
+  } else if (descriptive_cell_groups) {
+    paste0(grouping_source, "_descriptive_effect_sizes_completed")
   } else if (design_review_required) {
-    "sample_design_needs_review"
+    "sample_design_needs_review_descriptive_completed"
   } else {
     "exploratory_no_valid_replication"
   }
@@ -1892,6 +2149,11 @@ utils::globalVariables(c(
     "The explicitly requested Seurat Wilcoxon tests were run at cell level. Their P values are exploratory and do not substitute for biological replication."
   } else if (any_inferential) {
     "Replicate-aware edgeR pseudobulk results were generated where both groups had at least two biological samples."
+  } else if (descriptive_cell_groups) {
+    paste0(
+      "Descriptive feature effect sizes were generated from ", gsub("_", " ", grouping_source),
+      " groups without formal P values. A verified replicate-aware sample design is still required for inference."
+    )
   } else if (design_review_required) {
     paste0(
       "Automatic sample grouping requires review; descriptive effect sizes were exported without formal P values. ",
@@ -1908,14 +2170,19 @@ utils::globalVariables(c(
       "edgeR::glmQLFTest"
     } else if (wilcox_requested) {
       "descriptive group aggregate"
+    } else if (descriptive_cell_groups) {
+      "descriptive cell-group aggregate"
     } else {
       "descriptive pseudobulk"
     },
     artifacts,
     list(sample_column = sample_column, group_column = group_column,
+         grouping_source = grouping_source,
          strata_column = strata_column %||% "all_cells", inferential = any_inferential,
          exploratory = any_exploratory, wilcox = any_wilcox,
          design_needs_review = design_review_required,
+         ambiguous_sample_groups = ambiguous,
+         marker_grouping_column = marker_grouping_column,
          requested_strategy = strategy)
   )
 }
@@ -2179,6 +2446,59 @@ utils::globalVariables(c(
   artifacts
 }
 
+.fa_descriptive_gene_set_effects <- function(rankings, gene_sets, cfg = list()) {
+  required <- c("SYMBOL", "logFC", "stratum", "contrast")
+  if (!is.data.frame(rankings) || !nrow(rankings) || !length(gene_sets) ||
+      !all(required %in% names(rankings))) return(data.frame())
+  keys <- unique(rankings[c("stratum", "contrast")])
+  max_jobs <- as.integer(cfg$max_enrichment_contrasts %||% 8L)
+  if (nrow(keys) > max_jobs) keys <- keys[seq_len(max_jobs), , drop = FALSE]
+  min_overlap <- as.integer(cfg$descriptive_min_overlap %||% 3L)
+  max_sets <- as.integer(cfg$max_descriptive_gene_sets %||% 250L)
+  rows <- list()
+  for (i in seq_len(nrow(keys))) {
+    subset <- rankings[
+      rankings$stratum == keys$stratum[[i]] & rankings$contrast == keys$contrast[[i]] &
+        !is.na(rankings$SYMBOL) & nzchar(rankings$SYMBOL) & is.finite(rankings$logFC),
+      , drop = FALSE
+    ]
+    if (!nrow(subset)) next
+    subset <- subset[order(abs(subset$logFC), decreasing = TRUE), , drop = FALSE]
+    subset <- subset[!duplicated(toupper(subset$SYMBOL)), , drop = FALSE]
+    logfc <- stats::setNames(as.numeric(subset$logFC), toupper(as.character(subset$SYMBOL)))
+    display_symbols <- stats::setNames(as.character(subset$SYMBOL), toupper(as.character(subset$SYMBOL)))
+    scored <- lapply(names(gene_sets), function(term) {
+      member_keys <- unique(toupper(as.character(gene_sets[[term]])))
+      overlap <- intersect(member_keys, names(logfc))
+      if (length(overlap) < min_overlap) return(NULL)
+      effects <- unname(logfc[overlap])
+      leading <- overlap[order(abs(effects), decreasing = TRUE)]
+      leading <- utils::head(leading, as.integer(cfg$descriptive_leading_genes %||% 10L))
+      data.frame(
+        stratum = keys$stratum[[i]], contrast = keys$contrast[[i]],
+        gene_set = term, n_set_genes = length(member_keys), n_overlap = length(overlap),
+        mean_logFC = mean(effects), median_logFC = stats::median(effects),
+        mean_absolute_logFC = mean(abs(effects)),
+        fraction_higher_in_group_b = mean(effects > 0),
+        dominant_direction = if (mean(effects) >= 0) "higher in group B" else "higher in group A",
+        leading_features = paste(unname(display_symbols[leading]), collapse = ";"),
+        analysis_type = "descriptive_gene_set_effect_summary",
+        stringsAsFactors = FALSE
+      )
+    })
+    scored <- Filter(Negate(is.null), scored)
+    if (!length(scored)) next
+    scored <- do.call(rbind, scored)
+    scored <- scored[order(scored$mean_absolute_logFC, decreasing = TRUE), , drop = FALSE]
+    if (nrow(scored) > max_sets) scored <- scored[seq_len(max_sets), , drop = FALSE]
+    rows[[length(rows) + 1L]] <- scored
+  }
+  if (!length(rows)) return(data.frame())
+  result <- do.call(rbind, rows)
+  rownames(result) <- NULL
+  result
+}
+
 .fa_run_gsva <- function(object, cfg, gene_sets, resources = list()) {
   if (!length(gene_sets) || !.fa_pkg_available("GSVA")) return(NULL)
   counts <- .fa_matrix(object, "counts", cfg$assay %||% .fa_default_assay(object))
@@ -2291,7 +2611,7 @@ utils::globalVariables(c(
   }
   completed_types <- character()
   skipped_reasons <- character()
-  if (!is.null(rankings) && nrow(rankings) && cluster_profiler_available) {
+  if (!is.null(rankings) && nrow(rankings)) {
     symbols <- .fa_feature_symbols(object, cfg$assay %||% .fa_default_assay(object))
     mapping <- .fa_feature_mapping(
       unique(rankings$feature), symbols, orgdb,
@@ -2305,6 +2625,37 @@ utils::globalVariables(c(
                       ENTREZID = "Species-matched Entrez identifier; NA when no validated mapping exists.")
     )
     rankings <- merge(rankings, mapping, by = "feature", all.x = TRUE, sort = FALSE)
+    if (isTRUE(cfg$descriptive_rank_summary %||% TRUE) && length(gene_sets)) {
+      descriptive_sets <- .fa_descriptive_gene_set_effects(rankings, gene_sets, cfg)
+      if (nrow(descriptive_sets)) {
+        artifacts[[length(artifacts) + 1L]] <- .fa_write_table_artifact(
+          descriptive_sets, output, "enrichment", "descriptive_gene_set_effects",
+          "Descriptive gene-set expression effects",
+          paste(
+            "One row per gene set and contrast. Values summarize member-gene log2 fold changes",
+            "from the available rankings, but are not an enrichment significance test and contain no P values."
+          ),
+          "gene-set contrast",
+          list(
+            n_overlap = "Number of gene-set members with a finite ranked expression effect.",
+            mean_logFC = "Arithmetic mean of member-gene log2 fold changes.",
+            median_logFC = "Median member-gene log2 fold change.",
+            mean_absolute_logFC = "Mean absolute member-gene log2 fold change; a descriptive magnitude only.",
+            fraction_higher_in_group_b = "Fraction of overlapping genes with log2 fold change above zero.",
+            leading_features = "Up to ten overlapping genes with the largest absolute effects.",
+            analysis_type = "Always descriptive_gene_set_effect_summary; no significance inference is encoded."
+          ),
+          units = list(
+            mean_logFC = "log2 fold change", median_logFC = "log2 fold change",
+            mean_absolute_logFC = "absolute log2 fold change",
+            fraction_higher_in_group_b = "fraction"
+          )
+        )
+        completed_types <- c(completed_types, "descriptive gene-set effect summary")
+      }
+    }
+  }
+  if (!is.null(rankings) && nrow(rankings) && cluster_profiler_available) {
     keys <- unique(rankings[c("stratum", "contrast")])
     max_jobs <- as.integer(cfg$max_enrichment_contrasts %||% 8L)
     if (nrow(keys) > max_jobs) keys <- keys[seq_len(max_jobs), , drop = FALSE]
@@ -2698,6 +3049,12 @@ utils::globalVariables(c(
 }
 
 .fa_module_pseudotime <- function(object, output, cfg, seed, verbose) {
+  if (isFALSE(cfg$export_geometry_without_root) && is.null(cfg$root)) {
+    return(.fa_result(
+      object, "needs_input", "trajectory_root_missing",
+      "No biological root was supplied and unrooted geometry export was disabled explicitly."
+    ))
+  }
   if (!.fa_pkg_available("monocle3")) {
     return(.fa_result(object, "skipped", "dependency_missing",
                       "monocle3 is not installed; trajectory geometry was not computed."))
@@ -2825,7 +3182,9 @@ utils::globalVariables(c(
       ))
     }
     return(.fa_result(
-      object, "needs_input", if (isTRUE(root$supplied)) "trajectory_root_invalid" else "trajectory_root_missing",
+      object,
+      if (isTRUE(cfg$export_geometry_without_root %||% TRUE) && length(artifacts)) "partial" else "needs_input",
+      if (isTRUE(root$supplied)) "trajectory_geometry_completed_root_invalid" else "trajectory_geometry_completed_root_missing",
       if (isTRUE(root$supplied)) {
         paste0("Trajectory geometry was exported, but pseudotime was not assigned because the supplied root is invalid: ", root_issue)
       } else {
@@ -2851,8 +3210,8 @@ utils::globalVariables(c(
   )
   if (inherits(ordered, "error")) {
     return(.fa_result(
-      object, "needs_input", "trajectory_root_invalid",
-      paste0("The supplied trajectory root could not be applied by monocle3: ", conditionMessage(ordered)),
+      object, "partial", "trajectory_geometry_completed_root_invalid",
+      paste0("Trajectory geometry was exported, but the supplied root could not be applied by monocle3: ", conditionMessage(ordered)),
       "monocle3", artifacts,
       list(root_type = root$type, root_message = root$message)
     ))
@@ -2911,16 +3270,73 @@ utils::globalVariables(c(
   table
 }
 
-.fa_module_communication <- function(object, output, cfg, seed, verbose, species) {
-  if (!.fa_pkg_available("CellChat")) {
-    return(.fa_result(object, "skipped", "dependency_missing",
-                      "CellChat is not installed; communication analysis was not run."))
-  }
+.fa_communication_context <- function(object, output, cfg) {
+  meta <- .seurat_metadata(object)
   annotation_column <- .fa_annotation_column(object, cfg)
-  if (is.null(annotation_column)) {
+  cluster_column <- .fa_cluster_column(object, cfg)
+  context_column <- annotation_column %||% cluster_column
+  if (is.null(context_column) || !context_column %in% names(meta)) {
+    return(list(annotation_column = annotation_column, context_column = NULL, artifacts = list()))
+  }
+  labels <- as.character(meta[[context_column]])
+  valid <- !is.na(labels) & nzchar(labels)
+  if (!any(valid)) {
+    return(list(annotation_column = annotation_column, context_column = context_column, artifacts = list()))
+  }
+  context <- as.data.frame(table(group = labels[valid]), stringsAsFactors = FALSE)
+  names(context)[[2L]] <- "n_cells"
+  context$grouping_column <- context_column
+  context$grouping_role <- if (identical(context_column, annotation_column)) "cell_annotation" else "cluster_context_only"
+  context$eligible_for_cellchat <- identical(context_column, annotation_column)
+  artifact <- .fa_write_table_artifact(
+    context, output, "communication", "grouping_context", "Communication grouping context",
+    paste(
+      "One row per observed annotation or cluster group before communication analysis.",
+      "Cluster-only rows are descriptive context and are not silently treated as biological cell types."
+    ),
+    "group", list(
+      grouping_column = "Metadata column used for this descriptive context.",
+      grouping_role = "cell_annotation or cluster_context_only.",
+      eligible_for_cellchat = "TRUE only when a biological annotation column was resolved."
+    )
+  )
+  list(annotation_column = annotation_column, context_column = context_column, artifacts = list(artifact))
+}
+
+.fa_module_communication <- function(object, output, cfg, seed, verbose, species) {
+  context <- if (isTRUE(cfg$export_group_overview %||% TRUE)) {
+    .fa_communication_context(object, output, cfg)
+  } else {
+    list(annotation_column = .fa_annotation_column(object, cfg), context_column = NULL, artifacts = list())
+  }
+  context_artifacts <- context$artifacts
+  if (!.fa_pkg_available("CellChat")) {
+    has_context <- length(context_artifacts) > 0L
     return(.fa_result(
-      object, "needs_input", "annotation_missing",
-      "CellChat requires an existing cell annotation column. Cluster IDs were not silently relabeled as cell types."
+      object, if (has_context) "partial" else "skipped",
+      if (has_context) "dependency_missing_context_exported" else "dependency_missing",
+      if (has_context) {
+        "Communication group context was exported, but CellChat is not installed and no interaction inference was run."
+      } else {
+        "CellChat is not installed and no grouping context or interaction inference was available."
+      },
+      artifacts = context_artifacts,
+      details = list(context_column = context$context_column)
+    ))
+  }
+  annotation_column <- context$annotation_column
+  if (is.null(annotation_column)) {
+    has_context <- length(context_artifacts) > 0L
+    return(.fa_result(
+      object, if (has_context) "partial" else "needs_input",
+      if (has_context) "annotation_missing_context_exported" else "annotation_missing",
+      if (has_context) {
+        "CellChat requires a biological annotation. Available cluster-size context was exported, but cluster IDs were not silently relabeled as cell types."
+      } else {
+        "CellChat requires a biological annotation, and no annotation or cluster context was available."
+      },
+      artifacts = context_artifacts,
+      details = list(context_column = context$context_column)
     ))
   }
   resources <- .fa_species_resources(species, cfg)
@@ -2928,10 +3344,15 @@ utils::globalVariables(c(
   database_name <- cfg$database_name %||% resources$cellchat
   if (is.null(database) && !is.null(database_name)) database <- .fa_pkg_object("CellChat", database_name)
   if (is.null(database)) {
+    has_context <- length(context_artifacts) > 0L
     return(.fa_result(
-      object, "needs_input", "species_database_missing",
-      paste0("No CellChat database was supplied for species '", species,
-             "'. The package will not substitute the human or mouse database for another species.")
+      object, if (has_context) "partial" else "needs_input",
+      if (has_context) "species_database_missing_context_exported" else "species_database_missing",
+      paste0("No CellChat database was supplied for species '", species, "'. ",
+             if (has_context) "Group context was exported, but " else "",
+             "the package did not substitute another species database."),
+      artifacts = context_artifacts,
+      details = list(context_column = context$context_column)
     ))
   }
   assay <- cfg$assay %||% .fa_default_assay(object)
@@ -2939,8 +3360,12 @@ utils::globalVariables(c(
   if (is.null(data)) {
     normalize <- .fa_pkg_fun("Seurat", "NormalizeData")
     if (is.null(normalize)) {
-      return(.fa_result(object, "skipped", "normalized_data_missing",
-                        "CellChat requires normalized expression data."))
+      return(.fa_result(
+        object, if (length(context_artifacts)) "partial" else "skipped",
+        "normalized_data_missing_context_exported",
+        "Grouping context was retained, but CellChat requires normalized expression data.",
+        artifacts = context_artifacts
+      ))
     }
     object <- normalize(object, assay = assay, verbose = FALSE)
     data <- .fa_matrix(object, "data", assay)
@@ -2952,9 +3377,13 @@ utils::globalVariables(c(
   valid_labels <- names(which(table(labels[valid]) >= minimum_cells))
   valid <- valid & labels %in% valid_labels
   if (length(valid_labels) < 2L) {
+    has_context <- length(context_artifacts) > 0L
     return(.fa_result(
-      object, "skipped", "fewer_than_two_valid_groups",
-      sprintf("CellChat needs at least two annotation groups with %s or more cells.", minimum_cells)
+      object, if (has_context) "partial" else "skipped",
+      if (has_context) "fewer_than_two_valid_groups_context_exported" else "fewer_than_two_valid_groups",
+      sprintf("%sCellChat needs at least two annotation groups with %s or more cells.",
+              if (has_context) "Group context was exported, but " else "", minimum_cells),
+      artifacts = context_artifacts
     ))
   }
   max_per_group <- as.integer(cfg$max_cells_per_group %||% 1000L)
@@ -2989,14 +3418,50 @@ utils::globalVariables(c(
                         "aggregateNet", "subsetCommunication")
   if (is.null(create_cellchat) || any(vapply(functions, is.null, logical(1)))) {
     return(.fa_result(object, "failed", "cellchat_api_missing",
-                      "The installed CellChat does not expose the required analysis functions."))
+                      "The installed CellChat does not expose the required analysis functions.",
+                      artifacts = context_artifacts))
   }
   cellchat_meta <- data.frame(
     annotation = as.character(meta[[annotation_column]]),
     row.names = rownames(meta), stringsAsFactors = FALSE
   )
-  cellchat <- create_cellchat(object = data, meta = cellchat_meta, group.by = "annotation")
-  methods::slot(cellchat, "DB") <- database
+  creation_error <- NULL
+  cellchat <- tryCatch({
+    value <- create_cellchat(object = data, meta = cellchat_meta, group.by = "annotation")
+    methods::slot(value, "DB") <- database
+    value
+  }, error = function(e) {
+    creation_error <<- conditionMessage(e)
+    NULL
+  })
+  if (!is.null(creation_error)) {
+    failed_groups <- as.data.frame(table(annotation = cellchat_meta$annotation), stringsAsFactors = FALSE)
+    names(failed_groups)[2L] <- "n_cells_analyzed"
+    failure_artifact <- .fa_write_table_artifact(
+      failed_groups, output, "communication", "cellchat_groups", "CellChat analyzed groups",
+      "One row per annotation group selected for CellChat. Object creation failed before interaction inference started.",
+      "annotation group"
+    )
+    diagnostic <- data.frame(
+      stage = "CellChat object creation",
+      outcome = "object_creation_error",
+      diagnostic_message = creation_error,
+      biological_interpretation = "none; this computational error is not evidence that communication is biologically absent",
+      stringsAsFactors = FALSE
+    )
+    diagnostic_artifact <- .fa_write_table_artifact(
+      diagnostic, output, "communication", "cellchat_diagnostic", "CellChat diagnostic",
+      "One row recording a CellChat object-creation failure. It must not be interpreted as biological absence of signaling.",
+      "pipeline diagnostic"
+    )
+    return(.fa_result(
+      object, "failed", "cellchat_creation_failed",
+      paste0("CellChat object creation failed: ", creation_error),
+      "CellChat", c(context_artifacts, list(failure_artifact, diagnostic_artifact)),
+      list(species = species, database = database_name %||% "user supplied",
+           annotation_column = annotation_column, cells = ncol(data), groups = valid_labels)
+    ))
+  }
   pipeline_error <- NULL
   cellchat <- tryCatch({
     value <- functions$subsetData(cellchat)
@@ -3021,16 +3486,31 @@ utils::globalVariables(c(
       "One row per annotation group supplied to CellChat after deterministic downsampling. No interaction table was produced.",
       "annotation group"
     )
-    no_signal <- grepl("no rows|subscript out of bounds|dimension|0 interactions", pipeline_error, ignore.case = TRUE)
+    no_signal <- grepl(
+      "no rows( to aggregate)?|zero rows|0 rows|0 interactions|no (significant |analyzable )?interactions|empty interaction",
+      pipeline_error, ignore.case = TRUE
+    )
+    diagnostic <- data.frame(
+      stage = "CellChat pipeline",
+      outcome = if (no_signal) "no_analyzable_interactions_after_filtering" else "pipeline_error",
+      diagnostic_message = pipeline_error,
+      biological_interpretation = "none; this diagnostic is not evidence that communication is biologically absent",
+      stringsAsFactors = FALSE
+    )
+    diagnostic_artifact <- .fa_write_table_artifact(
+      diagnostic, output, "communication", "cellchat_diagnostic", "CellChat diagnostic",
+      "One row recording the computational outcome. A no-row/filtering outcome must not be interpreted as biological absence of signaling.",
+      "pipeline diagnostic"
+    )
     return(.fa_result(
-      object, if (no_signal) "skipped" else "failed",
-      if (no_signal) "no_detectable_communication" else "cellchat_failed",
+      object, if (no_signal) "partial" else "failed",
+      if (no_signal) "communication_context_completed_no_analyzable_interactions" else "cellchat_failed",
       if (no_signal) {
-        paste0("CellChat found no analyzable ligand-receptor signal after filtering: ", pipeline_error)
+        paste0("Group context was exported, but CellChat produced no analyzable interactions after filtering: ", pipeline_error)
       } else {
         paste0("CellChat failed: ", pipeline_error)
       },
-      "CellChat", list(failure_artifact),
+      "CellChat", c(context_artifacts, list(failure_artifact, diagnostic_artifact)),
       list(species = species, database = database_name %||% "user supplied",
            annotation_column = annotation_column, cells = ncol(data), groups = valid_labels)
     ))
@@ -3040,7 +3520,7 @@ utils::globalVariables(c(
   net <- .slot_or_null(cellchat, "net") %||% list()
   count_table <- .fa_matrix_to_long(net$count, "interaction_count")
   weight_table <- .fa_matrix_to_long(net$weight, "interaction_weight")
-  artifacts <- list()
+  artifacts <- context_artifacts
   if (nrow(interactions)) artifacts[[length(artifacts) + 1L]] <- .fa_write_table_artifact(
     interactions, output, "communication", "ligand_receptor_interactions", "CellChat ligand-receptor interactions",
     "One row per inferred source-target ligand-receptor record returned by CellChat.",
@@ -3088,6 +3568,29 @@ utils::globalVariables(c(
     artifacts <- c(artifacts, .fa_write_plot_artifacts(
       heatmap, output, "communication", "network_weights", "Communication network weights",
       "CellChat aggregated interaction weights for every sender-receiver annotation pair."
+    ))
+  }
+  has_interaction_output <- nrow(interactions) > 0L || nrow(pathways) > 0L ||
+    (nrow(count_table) > 0L && any(count_table$interaction_count > 0, na.rm = TRUE)) ||
+    (nrow(weight_table) > 0L && any(weight_table$interaction_weight > 0, na.rm = TRUE))
+  if (!has_interaction_output) {
+    diagnostic <- data.frame(
+      stage = "CellChat result extraction", outcome = "no_analyzable_interactions",
+      diagnostic_message = "The pipeline returned without error, but extracted interaction/pathway/network outputs were empty or zero.",
+      biological_interpretation = "none; an empty computational result is not evidence that communication is biologically absent",
+      stringsAsFactors = FALSE
+    )
+    artifacts[[length(artifacts) + 1L]] <- .fa_write_table_artifact(
+      diagnostic, output, "communication", "cellchat_diagnostic", "CellChat diagnostic",
+      "One row recording an empty computational output; this must not be interpreted as biological absence of signaling.",
+      "pipeline diagnostic"
+    )
+    return(.fa_result(
+      object, "partial", "communication_context_completed_no_analyzable_interactions",
+      "CellChat grouping context and the analysis object were exported, but no analyzable interaction output was extracted.",
+      "CellChat", artifacts,
+      list(species = species, database = database_name %||% "user supplied",
+           annotation_column = annotation_column, cells = ncol(data), groups = valid_labels)
     ))
   }
   .fa_result(
@@ -3176,8 +3679,19 @@ utils::globalVariables(c(
 }
 
 .fa_module_cell_cycle <- function(object, output, cfg, seed, verbose, species) {
-  genes <- .fa_cell_cycle_genes(species, cfg)
-  if (is.null(genes)) {
+  meta <- .seurat_metadata(object)
+  score_columns <- c("S.Score", "G2M.Score", "Phase")
+  used_existing <- all(score_columns %in% names(meta)) && !isTRUE(cfg$force)
+  genes <- if (used_existing) {
+    list(
+      s.genes = character(), g2m.genes = character(),
+      source = "existing RDS metadata columns S.Score, G2M.Score, and Phase",
+      mapping = data.frame()
+    )
+  } else {
+    .fa_cell_cycle_genes(species, cfg)
+  }
+  if (is.null(genes) && !used_existing) {
     strategy <- .fa_species_resources(species, cfg)$cell_cycle_strategy %||% "user_supplied"
     needs_user <- identical(strategy, "user_supplied")
     return(.fa_result(
@@ -3202,19 +3716,16 @@ utils::globalVariables(c(
     symbol_column = cfg$symbol_column %||% resources$symbol_column %||% "SYMBOL"
   )
   symbols <- stats::setNames(as.character(mapping$SYMBOL), mapping$feature)
-  s_features <- .fa_match_features(genes$s.genes, symbols)
-  g2m_features <- .fa_match_features(genes$g2m.genes, symbols)
-  if (length(s_features) < as.integer(cfg$min_genes_per_set %||% 5L) ||
-      length(g2m_features) < as.integer(cfg$min_genes_per_set %||% 5L)) {
+  s_features <- if (used_existing) character() else .fa_match_features(genes$s.genes, symbols)
+  g2m_features <- if (used_existing) character() else .fa_match_features(genes$g2m.genes, symbols)
+  if (!used_existing && (length(s_features) < as.integer(cfg$min_genes_per_set %||% 5L) ||
+      length(g2m_features) < as.integer(cfg$min_genes_per_set %||% 5L))) {
     return(.fa_result(
       object, "needs_input", "insufficient_cell_cycle_gene_overlap",
       sprintf("Only %s S-phase and %s G2M genes matched the assay; supply species-appropriate genes or feature symbols.",
               length(s_features), length(g2m_features))
     ))
   }
-  meta <- .seurat_metadata(object)
-  score_columns <- c("S.Score", "G2M.Score", "Phase")
-  used_existing <- all(score_columns %in% names(meta)) && !isTRUE(cfg$force)
   if (!used_existing) {
     scoring <- .fa_pkg_fun("Seurat", "CellCycleScoring")
     if (is.null(scoring)) {
@@ -3246,8 +3757,10 @@ utils::globalVariables(c(
   if (!is.null(sample_column)) scores$sample <- as.character(meta[[sample_column]])
   if (!is.null(annotation_column)) scores$annotation <- as.character(meta[[annotation_column]])
   matched_genes <- rbind(
-    data.frame(phase_set = "S", feature = s_features, symbol = unname(symbols[s_features]), stringsAsFactors = FALSE),
-    data.frame(phase_set = "G2M", feature = g2m_features, symbol = unname(symbols[g2m_features]), stringsAsFactors = FALSE)
+    data.frame(phase_set = rep("S", length(s_features)), feature = s_features,
+               symbol = unname(symbols[s_features]), stringsAsFactors = FALSE),
+    data.frame(phase_set = rep("G2M", length(g2m_features)), feature = g2m_features,
+               symbol = unname(symbols[g2m_features]), stringsAsFactors = FALSE)
   )
   artifacts <- list(
     .fa_write_table_artifact(
@@ -3704,26 +4217,233 @@ utils::globalVariables(c(
   list(annotation = annotation_path, gene_order = order_path)
 }
 
+.fa_assembly_tokens <- function(value) {
+  value <- unique(trimws(as.character(value %||% character())))
+  value <- value[!is.na(value) & nzchar(value)]
+  if (!length(value)) return(character())
+  pieces <- unlist(strsplit(value, "[/,;|[:space:]]+"), use.names = FALSE)
+  pieces <- unique(c(value, pieces))
+  tokens <- tolower(gsub("[^[:alnum:]]", "", pieces))
+  unique(tokens[nzchar(tokens)])
+}
+
+.fa_cnv_assembly_state <- function(cfg, resources) {
+  registered <- resources$genome_assembly %||% NA_character_
+  requested <- cfg$object_genome_assembly %||% cfg$requested_genome_assembly %||%
+    cfg$assembly %||% cfg$genome_assembly %||% cfg$confirmed_genome_assembly
+  confirmation_value <- cfg$genome_assembly_confirmed %||% FALSE
+  if (is.character(confirmation_value) && length(confirmation_value) &&
+      !is.na(confirmation_value[[1L]]) && nzchar(confirmation_value[[1L]]) && is.null(requested)) {
+    requested <- confirmation_value[[1L]]
+  }
+  registered_tokens <- .fa_assembly_tokens(registered)
+  requested_tokens <- .fa_assembly_tokens(requested)
+  assembly_matches <- length(registered_tokens) > 0L && length(requested_tokens) > 0L &&
+    length(intersect(registered_tokens, requested_tokens)) > 0L
+  explicit_confirmation <- isTRUE(confirmation_value)
+  explicit_coordinate_resource <- any(vapply(
+    c("gene_order", "gtf", "txdb"),
+    function(field) !is.null(cfg[[field]]) && length(cfg[[field]]) > 0L,
+    logical(1)
+  ))
+  known_mismatch <- length(registered_tokens) > 0L && length(requested_tokens) > 0L && !assembly_matches
+  confirmed <- !known_mismatch && (explicit_confirmation || assembly_matches)
+  allowed <- explicit_coordinate_resource || confirmed
+  basis <- if (explicit_coordinate_resource) {
+    "explicit_coordinate_resource"
+  } else if (assembly_matches) {
+    "requested_assembly_matches_registered_assembly"
+  } else if (explicit_confirmation) {
+    "user_confirmed_registered_assembly"
+  } else if (known_mismatch) {
+    "requested_assembly_mismatch"
+  } else {
+    "object_build_unverified"
+  }
+  list(
+    registered_assembly = as.character(registered %||% NA_character_)[[1L]],
+    requested_assembly = if (is.null(requested) || !length(requested)) NA_character_ else as.character(requested)[[1L]],
+    assembly_matches = assembly_matches,
+    genome_assembly_confirmed = confirmed,
+    explicit_coordinate_resource = explicit_coordinate_resource,
+    object_build_unverified = !confirmed,
+    inference_allowed = allowed,
+    confirmation_basis = basis
+  )
+}
+
+.fa_cnv_readiness_artifacts <- function(object, output, cfg, species) {
+  resources <- .fa_species_resources(species, cfg)
+  assembly <- .fa_cnv_assembly_state(cfg, resources)
+  resolved_cfg <- cfg
+  for (field in c("gene_order", "gtf", "txdb", "orgdb")) {
+    if (is.null(resolved_cfg[[field]]) && !is.null(resources[[field]])) {
+      resolved_cfg[[field]] <- resources[[field]]
+    }
+  }
+  assay <- cfg$assay %||% .fa_default_assay(object)
+  counts <- .fa_matrix(object, "counts", assay)
+  annotation_column <- cfg$annotation_column %||% .fa_annotation_column(object, cfg)
+  meta <- .seurat_metadata(object)
+  labels <- if (!is.null(annotation_column) && annotation_column %in% names(meta)) {
+    as.character(meta[[annotation_column]])
+  } else {
+    rep(NA_character_, nrow(meta))
+  }
+  groups <- sort(unique(labels[!is.na(labels) & nzchar(labels)]))
+  gene_order <- tryCatch(.fa_gene_order(resolved_cfg), error = function(e) NULL)
+  summary <- data.frame(
+    item = c(
+      "species", "counts_available", "cells", "features", "annotation_column",
+      "observed_annotation_groups", "reference_groups_supplied", "gene_order_available",
+      "gene_order_genes", "registered_assembly", "requested_assembly",
+      "genome_assembly_confirmed", "object_build_unverified",
+      "assembly_confirmation_basis", "inference_run"
+    ),
+    value = as.character(c(
+      species, !is.null(counts), if (is.null(counts)) NA_integer_ else ncol(counts),
+      if (is.null(counts)) NA_integer_ else nrow(counts), annotation_column %||% NA_character_,
+      length(groups), length(cfg$reference_groups %||% character()), !is.null(gene_order),
+      if (is.null(gene_order)) 0L else nrow(gene_order), assembly$registered_assembly,
+      assembly$requested_assembly, assembly$genome_assembly_confirmed,
+      assembly$object_build_unverified, assembly$confirmation_basis, FALSE
+    )),
+    interpretation = c(
+      "Species selected for genome-resource lookup.",
+      "Whether a raw-count layer is available.", "Number of cells in the object.",
+      "Number of assay features in the object.",
+      "Existing metadata column that could supply labels after the user explicitly selects reference groups.",
+      "Number of observed labels; this is not a recommendation of normal-reference status.",
+      "Number of explicitly supplied biological reference groups.",
+      "Whether a species/build gene-order resource was resolved.",
+      "Number of genes in the resolved gene-order resource.",
+      "Genome assembly registered for the built-in species coordinate resource.",
+      "Object assembly supplied by the user for comparison; NA means it was not declared.",
+      "TRUE only after an explicit confirmation or a declared assembly match.",
+      "TRUE when the input object's genome build has not been verified against the registered assembly.",
+      "Why coordinate use is allowed or blocked; explicit coordinate files remain the user's declared resource.",
+      "Always FALSE in this readiness-only output; no CNV inference was performed."
+    ),
+    stringsAsFactors = FALSE
+  )
+  artifacts <- list(.fa_write_table_artifact(
+    summary, output, "cnv", "cnv_readiness", "CNV readiness overview",
+    "One row per inferCNV prerequisite. This table reports availability only and never guesses a normal reference population.",
+    "prerequisite",
+    list(value = "Observed value or availability flag.",
+         interpretation = "How the prerequisite affects inferCNV readiness.")
+  ))
+  if (length(groups)) {
+    group_table <- as.data.frame(table(group = labels[!is.na(labels) & nzchar(labels)]), stringsAsFactors = FALSE)
+    names(group_table)[[2L]] <- "n_cells"
+    group_table$annotation_column <- annotation_column
+    group_table$reference_selected <- group_table$group %in% as.character(cfg$reference_groups %||% character())
+    group_table$candidate_only <- !group_table$reference_selected
+    artifacts[[length(artifacts) + 1L]] <- .fa_write_table_artifact(
+      group_table, output, "cnv", "cnv_observed_groups", "Observed groups for CNV configuration",
+      paste(
+        "One row per observed annotation group. Unselected groups are listed only to help configure",
+        "reference_groups; the package does not infer which population is normal."
+      ),
+      "annotation group",
+      list(reference_selected = "TRUE only when the group was supplied explicitly in reference_groups.",
+           candidate_only = "TRUE means listed for review only, not selected as a biological normal reference.")
+    )
+  }
+  if (!is.null(counts) && !is.null(gene_order) && nrow(gene_order)) {
+    symbols <- .fa_feature_symbols(object, assay)
+    feature_to_gene <- rownames(counts)
+    direct_overlap <- mean(feature_to_gene %in% gene_order$gene)
+    if (is.finite(direct_overlap) && direct_overlap < 0.2) feature_to_gene <- unname(symbols[rownames(counts)])
+    index <- match(feature_to_gene, gene_order$gene)
+    keep <- !is.na(index) & !duplicated(feature_to_gene)
+    if (any(keep)) {
+      matched_order <- data.frame(
+        feature = rownames(counts)[keep], gene = gene_order$gene[index[keep]],
+        chromosome = gene_order$chromosome[index[keep]],
+        start = gene_order$start[index[keep]], stop = gene_order$stop[index[keep]],
+        stringsAsFactors = FALSE
+      )
+      matched_order <- matched_order[order(matched_order$chromosome, matched_order$start), , drop = FALSE]
+      artifacts[[length(artifacts) + 1L]] <- .fa_write_table_artifact(
+        matched_order, output, "cnv", "cnv_matched_gene_order_readiness",
+        "Matched gene order for CNV readiness",
+        paste(
+          "One row per assay feature matched to the registered gene-order resource.",
+          "This table contains no CNV signal and does not imply that inferCNV was run."
+        ),
+        "matched feature",
+        list(feature = "Exact assay row name.", gene = "Matched gene-order identifier.",
+             chromosome = "Genome-build contig.", start = "Start coordinate.", stop = "Stop coordinate."),
+        units = list(start = "base pairs", stop = "base pairs")
+      )
+    }
+  }
+  artifacts
+}
+
 .fa_module_cnv <- function(object, output, cfg, seed, verbose, species) {
+  readiness_artifacts <- if (isTRUE(cfg$export_readiness %||% TRUE)) {
+    .fa_cnv_readiness_artifacts(object, output, cfg, species)
+  } else {
+    list()
+  }
   reference_groups <- unique(as.character(cfg$reference_groups %||% character()))
   reference_groups <- reference_groups[!is.na(reference_groups) & nzchar(reference_groups)]
   if (!length(reference_groups)) {
+    readiness_note <- if (length(readiness_artifacts)) {
+      " Readiness tables were exported, but"
+    } else {
+      ""
+    }
     return(.fa_result(
       object, "needs_input", "cnv_reference_missing",
-      "inferCNV was not run because no biological reference_groups were supplied. The package never guesses a normal reference population."
+      paste0("inferCNV was not run because no biological reference_groups were supplied.",
+             readiness_note, " the package never guesses a normal reference population."),
+      artifacts = readiness_artifacts
+    ))
+  }
+  resources <- .fa_species_resources(species, cfg)
+  assembly <- .fa_cnv_assembly_state(cfg, resources)
+  if (!isTRUE(assembly$inference_allowed)) {
+    readiness_note <- if (length(readiness_artifacts)) {
+      " A readiness table records the unresolved assembly state."
+    } else {
+      ""
+    }
+    return(.fa_result(
+      object, "needs_input", "cnv_genome_assembly_confirmation_required",
+      paste0(
+        "inferCNV was not run because the input object's genome assembly is unverified. ",
+        "Explicitly provide gene_order, gtf, or txdb, or set genome_assembly_confirmed = TRUE ",
+        "after verifying the object against registered assembly '",
+        assembly$registered_assembly %||% "unknown", "'.", readiness_note
+      ),
+      artifacts = readiness_artifacts,
+      details = assembly
     ))
   }
   if (!.fa_pkg_available("infercnv")) {
-    return(.fa_result(object, "skipped", "dependency_missing", "infercnv is not installed."))
+    has_readiness <- length(readiness_artifacts) > 0L
+    return(.fa_result(
+      object, if (has_readiness) "partial" else "skipped",
+      if (has_readiness) "dependency_missing_readiness_exported" else "dependency_missing",
+      if (has_readiness) {
+        "CNV readiness was exported, but infercnv is not installed."
+      } else {
+        "infercnv is not installed."
+      },
+      artifacts = readiness_artifacts
+    ))
   }
   annotation_column <- cfg$annotation_column %||% .fa_annotation_column(object, cfg)
   if (is.null(annotation_column)) {
     return(.fa_result(
       object, "needs_input", "cnv_annotation_missing",
-      "inferCNV requires an existing annotation column containing the explicitly selected reference groups."
+      "inferCNV requires an existing annotation column containing the explicitly selected reference groups.",
+      artifacts = readiness_artifacts
     ))
   }
-  resources <- .fa_species_resources(species, cfg)
   for (field in c("gene_order", "gtf", "txdb", "orgdb")) {
     if (is.null(cfg[[field]]) && !is.null(resources[[field]])) cfg[[field]] <- resources[[field]]
   }
@@ -3732,13 +4452,18 @@ utils::globalVariables(c(
     return(.fa_result(
       object, "needs_input", "gene_order_missing",
       paste0("inferCNV requires a species/build-matched gene_order data frame/file, GTF, or installed TxDb resource. ",
-             "No usable gene order could be resolved for species '", species, "'.")
+             "No usable gene order could be resolved for species '", species, "'."),
+      artifacts = readiness_artifacts
     ))
   }
   assay <- cfg$assay %||% .fa_default_assay(object)
   counts <- .fa_matrix(object, "counts", assay)
   if (is.null(counts)) {
-    return(.fa_result(object, "skipped", "counts_missing", "inferCNV requires raw counts."))
+    has_readiness <- length(readiness_artifacts) > 0L
+    return(.fa_result(object, if (has_readiness) "partial" else "skipped",
+                      if (has_readiness) "counts_missing_readiness_exported" else "counts_missing",
+                      if (has_readiness) "CNV readiness was exported, but inferCNV requires raw counts." else "inferCNV requires raw counts.",
+                      artifacts = readiness_artifacts))
   }
   symbols <- .fa_feature_symbols(object, assay)
   feature_to_gene <- rownames(counts)
@@ -3749,7 +4474,8 @@ utils::globalVariables(c(
   if (sum(keep_features) < as.integer(cfg$min_ordered_genes %||% 100L)) {
     return(.fa_result(
       object, "needs_input", "insufficient_gene_order_overlap",
-      sprintf("Only %s assay features matched the supplied gene order; check species, genome build, and identifier type.", sum(keep_features))
+      sprintf("Only %s assay features matched the supplied gene order; check species, genome build, and identifier type.", sum(keep_features)),
+      artifacts = readiness_artifacts
     ))
   }
   counts <- counts[keep_features, , drop = FALSE]
@@ -3764,7 +4490,8 @@ utils::globalVariables(c(
     missing <- setdiff(reference_groups, unique(labels))
     return(.fa_result(
       object, "needs_input", "cnv_reference_not_found",
-      paste0("Reference groups are absent from '", annotation_column, "': ", paste(missing, collapse = ", "), ".")
+      paste0("Reference groups are absent from '", annotation_column, "': ", paste(missing, collapse = ", "), "."),
+      artifacts = readiness_artifacts
     ))
   }
   include_groups <- unique(c(reference_groups, as.character(cfg$include_groups %||% unique(labels))))
@@ -3782,7 +4509,7 @@ utils::globalVariables(c(
   annotation <- data.frame(cell = colnames(counts), group = labels, stringsAsFactors = FALSE)
   directory <- .fa_module_directory(output, "cnv")
   inputs <- .fa_write_infercnv_inputs(annotation, gene_order, directory)
-  artifacts <- list(
+  artifacts <- c(readiness_artifacts, list(
     .fa_write_table_artifact(
       annotation, output, "cnv", "cell_annotations", "inferCNV cell annotations",
       "One row per analyzed cell. group is copied from the selected existing annotation column; reference status comes only from explicit reference_groups.",
@@ -3808,7 +4535,7 @@ utils::globalVariables(c(
       column_dictionary = list(gene = "Matched gene name.", chromosome = "Genome-build contig.",
                                start = "Start coordinate.", stop = "End coordinate."), complete = TRUE
     )
-  )
+  ))
   create_infercnv <- .fa_pkg_fun("infercnv", "CreateInfercnvObject")
   run_infercnv <- .fa_pkg_fun("infercnv", "run")
   if (is.null(create_infercnv) || is.null(run_infercnv)) {
@@ -3816,26 +4543,49 @@ utils::globalVariables(c(
                       "The installed infercnv does not expose CreateInfercnvObject and run.",
                       artifacts = artifacts))
   }
-  infer_object <- create_infercnv(
-    raw_counts_matrix = counts,
-    annotations_file = inputs$annotation,
-    delim = "\t",
-    gene_order_file = inputs$gene_order,
-    ref_group_names = reference_groups,
-    min_max_counts_per_cell = cfg$min_max_counts_per_cell %||% c(100, Inf)
+  infer_object <- tryCatch(
+    create_infercnv(
+      raw_counts_matrix = counts,
+      annotations_file = inputs$annotation,
+      delim = "\t",
+      gene_order_file = inputs$gene_order,
+      ref_group_names = reference_groups,
+      min_max_counts_per_cell = cfg$min_max_counts_per_cell %||% c(100, Inf)
+    ),
+    error = function(e) e
   )
+  if (inherits(infer_object, "error")) {
+    return(.fa_result(
+      object, "failed", "infercnv_create_failed",
+      paste0("infercnv::CreateInfercnvObject failed: ", conditionMessage(infer_object)),
+      "infercnv", artifacts,
+      list(species = species, assembly = assembly, reference_groups = reference_groups)
+    ))
+  }
   run_directory <- file.path(directory, "infercnv_run")
   dir.create(run_directory, recursive = TRUE, showWarnings = FALSE)
-  infer_object <- run_infercnv(
-    infer_object,
-    cutoff = as.numeric(cfg$cutoff %||% 0.1),
-    out_dir = run_directory,
-    cluster_by_groups = isTRUE(cfg$cluster_by_groups %||% TRUE),
-    denoise = isTRUE(cfg$denoise),
-    HMM = isTRUE(cfg$HMM),
-    num_threads = as.integer(cfg$num_threads %||% 1L),
-    no_plot = isTRUE(cfg$no_plot %||% FALSE)
+  infer_object <- tryCatch(
+    run_infercnv(
+      infer_object,
+      cutoff = as.numeric(cfg$cutoff %||% 0.1),
+      out_dir = run_directory,
+      cluster_by_groups = isTRUE(cfg$cluster_by_groups %||% TRUE),
+      denoise = isTRUE(cfg$denoise),
+      HMM = isTRUE(cfg$HMM),
+      num_threads = as.integer(cfg$num_threads %||% 1L),
+      no_plot = isTRUE(cfg$no_plot %||% FALSE)
+    ),
+    error = function(e) e
   )
+  if (inherits(infer_object, "error")) {
+    return(.fa_result(
+      object, "failed", "infercnv_run_failed",
+      paste0("infercnv::run failed after validated inputs were written: ", conditionMessage(infer_object)),
+      "infercnv", artifacts,
+      list(species = species, assembly = assembly, reference_groups = reference_groups,
+           run_directory = .relative_path(run_directory, output))
+    ))
+  }
   artifacts[[length(artifacts) + 1L]] <- .fa_write_rds_artifact(
     infer_object, output, "cnv", "infercnv_object", "inferCNV analysis object",
     "infercnv object generated from a bounded per-group cell subset and an explicitly supplied biological reference and gene order."
@@ -3878,6 +4628,7 @@ utils::globalVariables(c(
     "infercnv", artifacts,
     list(species = species, annotation_column = annotation_column,
          reference_groups = reference_groups, cells = ncol(counts), genes = nrow(counts),
+         assembly = assembly,
          downsampling_max_per_group = max_per_group)
   )
 }

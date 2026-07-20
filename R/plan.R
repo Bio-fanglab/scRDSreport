@@ -127,6 +127,15 @@
   list(eligible = eligible, reason = reason, message = message)
 }
 
+.plan_assembly_tokens <- function(value) {
+  value <- unique(trimws(as.character(value %||% character())))
+  value <- value[!is.na(value) & nzchar(value)]
+  if (!length(value)) return(character())
+  pieces <- unique(c(value, unlist(strsplit(value, "[/,;|[:space:]]+"), use.names = FALSE)))
+  tokens <- tolower(gsub("[^[:alnum:]]", "", pieces))
+  unique(tokens[nzchar(tokens)])
+}
+
 .celltype_eligibility <- function(config, context, resources) {
   mode <- config$annotation$mode
   has_annotation <- .context_value(context, "has_annotation")
@@ -187,7 +196,10 @@
 
   has_annotation <- .context_value(context, "has_annotation")
   has_clusters <- .context_value(context, "has_clusters")
+  has_group <- .context_value(context, "has_group")
+  has_cell_cycle_scores <- .context_value(context, "has_cell_cycle_scores")
   annotation_or_cluster <- .any_prerequisite_flag(has_annotation, has_clusters)
+  differential_grouping <- .any_prerequisite_flag(has_group, annotation_or_cluster)
   n_samples <- .context_value(context, "n_samples")
   enough_samples <- if (is.numeric(n_samples) && length(n_samples) == 1L && !is.na(n_samples)) n_samples >= 2L else NA
 
@@ -196,10 +208,20 @@
     if (identical(config$differential$strategy, "none")) {
       return(.eligibility_result(FALSE, "differential_disabled", "Differential analysis was disabled explicitly."))
     }
-    if (isTRUE(annotation_or_cluster) && isTRUE(enough_samples)) {
+    if (isTRUE(differential_grouping) && isTRUE(enough_samples)) {
       return(.eligibility_result(TRUE, "ready", "Annotation/cluster and at least two samples are available."))
     }
-    if (isFALSE(annotation_or_cluster)) {
+    if (isTRUE(differential_grouping)) {
+      return(.eligibility_result(
+        TRUE,
+        "descriptive_fallback_ready",
+        paste(
+          "Annotation or cluster groups are available. If biological replication is",
+          "insufficient, the report will show descriptive group effect sizes without P values."
+        )
+      ))
+    }
+    if (isFALSE(differential_grouping)) {
       return(.eligibility_result(FALSE, "annotation_or_cluster_required", "Differential analysis needs an annotation or cluster field."))
     }
     if (isFALSE(enough_samples)) return(.eligibility_result(FALSE, "two_samples_required", "At least two samples are required."))
@@ -238,11 +260,20 @@
   }
   if (identical(id, "communication")) {
     if (.known_flag(has_annotation) && !isTRUE(has_annotation)) {
+      if (isTRUE(has_clusters)) {
+        return(.eligibility_result(
+          TRUE, "cluster_context_only",
+          "Cluster-size context can be exported, but communication inference still requires a biological annotation."
+        ))
+      }
       return(.eligibility_result(FALSE, "annotation_required", "CellChat requires an existing or explicitly requested annotation."))
     }
     if (is.null(resources)) return(.eligibility_result())
     if (!.resource_field_available(resources, "cellchat_db")) {
-      return(.eligibility_result(FALSE, "cellchat_database_unavailable", "No CellChat database is registered for this species."))
+      return(.eligibility_result(
+        TRUE, "communication_context_only",
+        "No CellChat database is registered for this species; annotation-group context will still be exported."
+      ))
     }
     return(.eligibility_result(
       TRUE, "ready",
@@ -250,6 +281,12 @@
     ))
   }
   if (identical(id, "cell_cycle")) {
+    if (isTRUE(has_cell_cycle_scores)) {
+      return(.eligibility_result(
+        TRUE, "existing_scores_ready",
+        "Existing S.Score, G2M.Score, and Phase values can be exported without species gene resources."
+      ))
+    }
     if (is.null(resources)) return(.eligibility_result())
     strategy <- resources$cell_cycle_strategy
     if (!is.null(strategy) && length(strategy) && !identical(strategy, "user_supplied")) {
@@ -266,12 +303,48 @@
     return(.eligibility_result(FALSE, "tf_catalog_required", "A transcription-factor catalog must be supplied for this species."))
   }
   if (identical(id, "cnv")) {
-    if (is.null(config$cnv$reference_groups)) {
-      return(.eligibility_result(FALSE, "cnv_reference_required", "inferCNV reference groups are never guessed."))
+    cnv_config <- utils::modifyList(
+      config$cnv %||% list(), config$module_options$cnv %||% list(), keep.null = TRUE
+    )
+    reference_groups <- as.character(cnv_config$reference_groups %||% character())
+    has_reference_groups <- any(!is.na(reference_groups) & nzchar(trimws(reference_groups)))
+    if (!has_reference_groups) {
+      return(.eligibility_result(
+        FALSE, "cnv_reference_required",
+        "inferCNV reference groups are never guessed; runtime can still export a CNV-readiness overview."
+      ))
     }
-    if (is.null(resources)) return(.eligibility_result())
-    if (.resource_field_available(resources, "txdb") || .resource_field_available(resources, "gtf")) {
-      return(.eligibility_result(TRUE, "ready", "CNV reference and genome coordinates are configured."))
+    explicit_coordinates <- any(vapply(
+      c("gene_order", "gtf", "txdb"),
+      function(field) {
+        value <- cnv_config[[field]]
+        if (is.null(value) || !length(value)) return(FALSE)
+        if (is.character(value)) return(any(!is.na(value) & nzchar(trimws(value))))
+        TRUE
+      }, logical(1)
+    ))
+    if (is.null(resources) && !explicit_coordinates) return(.eligibility_result())
+    registered <- if (is.null(resources)) NULL else resources$genome_assembly
+    requested <- cnv_config$object_genome_assembly %||% cnv_config$requested_genome_assembly %||%
+      cnv_config$assembly %||% cnv_config$genome_assembly %||% cnv_config$confirmed_genome_assembly
+    confirmation <- cnv_config$genome_assembly_confirmed %||% FALSE
+    if (is.character(confirmation) && length(confirmation) && is.null(requested)) requested <- confirmation[[1L]]
+    registered_tokens <- .plan_assembly_tokens(registered)
+    requested_tokens <- .plan_assembly_tokens(requested)
+    assembly_matches <- length(registered_tokens) && length(requested_tokens) &&
+      length(intersect(registered_tokens, requested_tokens)) > 0L
+    mismatch <- length(registered_tokens) && length(requested_tokens) && !assembly_matches
+    assembly_confirmed <- !mismatch && (isTRUE(confirmation) || assembly_matches)
+    if (!explicit_coordinates && !assembly_confirmed) {
+      return(.eligibility_result(
+        FALSE, "cnv_genome_assembly_confirmation_required",
+        "A registered TxDb is not sufficient by itself; confirm the input object's genome assembly before inferCNV."
+      ))
+    }
+    coordinates_available <- explicit_coordinates ||
+      .resource_field_available(resources, "txdb") || .resource_field_available(resources, "gtf")
+    if (coordinates_available) {
+      return(.eligibility_result(TRUE, "ready", "CNV reference and explicitly accepted genome coordinates are configured."))
     }
     return(.eligibility_result(FALSE, "cnv_genome_resource_required", "inferCNV needs a compatible TxDb or GTF."))
   }

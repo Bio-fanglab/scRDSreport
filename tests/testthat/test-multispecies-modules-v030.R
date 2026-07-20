@@ -80,6 +80,21 @@ test_that("invalid explicit annotation references never fall back silently", {
   ))
 })
 
+test_that("annotation reference loader preserves a loader failure", {
+  testthat::local_mocked_bindings(
+    .fa_pkg_fun = function(package, name, exported = TRUE) {
+      function(...) stop("Cannot open lock file", call. = FALSE)
+    },
+    .package = "scRDSreport"
+  )
+  loaded <- scRDSreport:::.fa_load_annotation_reference(
+    "mouse", list(reference = "celldex::ImmGenData")
+  )
+  expect_s3_class(loaded, "scRDSreport_reference_load_error")
+  expect_equal(loaded$reference, "celldex::ImmGenData")
+  expect_match(loaded$message, "lock file")
+})
+
 test_that("Entrez feature IDs map through the species OrgDb", {
   skip_if_not_installed("org.Mm.eg.db")
   orgdb <- scRDSreport:::.fa_orgdb(

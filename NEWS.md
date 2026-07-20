@@ -1,3 +1,28 @@
+# scRDSreport 0.3.1
+
+- Made useful, scientifically bounded fallback output the default for advanced
+  modules. When reliable biological replication is unavailable, differential
+  analysis now exports bounded annotation/cluster one-versus-rest rankings and
+  descriptive pooled-CPM/log2-fold-change tables and figures without P values
+  or FDR; pooled CPM is named explicitly and is not presented as a sample mean.
+- Added descriptive gene-set effect summaries that can consume exploratory
+  differential rankings. These summaries report overlap, direction, and effect
+  sizes only and are never presented as significance tests.
+- Kept biological decisions explicit while still producing diagnostic output:
+  trajectory analysis exports unrooted geometry and root candidates without an
+  explicit root; communication exports grouping context and diagnostics when
+  inference is unavailable; CNV exports readiness information without guessing
+  a normal reference or producing a CNV signal.
+- Added a genome-build gate before inferCNV can use a built-in TxDb, and retain
+  readiness/input artifacts when inferCNV object creation or execution fails.
+- Reused complete cell-cycle scores already present in an input RDS before
+  requiring external species resources.
+- Fixed annotation and object-audit tabs that could display generated HTML as
+  literal source text. The left report table of contents now starts expanded.
+- Improved the complete-file index with a wider explanation column and a fixed
+  per-row scroll area, and made fallback table descriptions distinguish
+  descriptive output from formal inference.
+
 # scRDSreport 0.3.0
 
 - Expanded the built-in species registry from human and mouse to nine common

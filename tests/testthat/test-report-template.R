@@ -31,6 +31,7 @@ test_that("a report renders with numeric cluster identifiers", {
   )
   object <- SeuratObject::CreateSeuratObject(counts = counts)
   object$seurat_clusters <- rep(0:1, each = 6L)
+  object$celltype <- rep(c("T cell", "B cell"), each = 6L)
   embeddings <- matrix(
     stats::rnorm(24L),
     ncol = 2L,
@@ -61,9 +62,16 @@ test_that("a report renders with numeric cluster identifiers", {
   html <- paste(readLines(result$report, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
   expect_match(html, "seurat_clusters", fixed = TRUE)
   expect_match(html, "<div class=\"interpretation-term\">rows（行）</div>", fixed = TRUE)
+  expect_match(html, "原始 RDS 注释预览", fixed = TRUE)
+  expect_match(html, "分析前对象", fixed = TRUE)
+  expect_match(html, "分析后对象", fixed = TRUE)
+  expect_match(html, "file-index-view", fixed = TRUE)
+  expect_match(html, "file-note-scroll", fixed = TRUE)
   expect_false(grepl(
     "<pre><code>&lt;div class=&quot;interpretation-term&quot;&gt;",
     html,
     fixed = TRUE
   ))
+  expect_false(grepl("&lt;h3&gt;原始 RDS 注释预览&lt;/h3&gt;", html, fixed = TRUE))
+  expect_false(grepl("&lt;h3&gt;分析前对象&lt;/h3&gt;", html, fixed = TRUE))
 })

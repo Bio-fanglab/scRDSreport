@@ -175,7 +175,10 @@ test_that("full plans contain every original report module and explain unmet pre
 
   configured <- report_config(
     trajectory_root = "Y_1",
-    cnv_reference = c("T cells", "B cells")
+    cnv_reference = c("T cells", "B cells"),
+    module_options = list(
+      cnv = list(object_genome_assembly = "GRCm38/mm10")
+    )
   )
   ready <- scRDSreport:::.build_analysis_plan(
     configured,
@@ -186,6 +189,42 @@ test_that("full plans contain every original report module and explain unmet pre
   )
   expect_true(scRDSreport:::.module_by_id(ready, "pseudotime")$eligible)
   expect_true(scRDSreport:::.module_by_id(ready, "cnv")$eligible)
+})
+
+test_that("CNV plans require genome-build confirmation before using a built-in TxDb", {
+  empty <- scRDSreport:::.build_analysis_plan(
+    report_config(module_options = list(cnv = list(
+      reference_groups = character(), gene_order = character()
+    ))),
+    context = list(
+      species = "mouse", has_annotation = TRUE, has_clusters = TRUE,
+      n_samples = 2L, n_cells = 500L
+    )
+  )
+  expect_equal(scRDSreport:::.module_by_id(empty, "cnv")$reason, "cnv_reference_required")
+
+  unconfirmed <- scRDSreport:::.build_analysis_plan(
+    report_config(cnv_reference = "Normal"),
+    context = list(
+      species = "mouse", has_annotation = TRUE, has_clusters = TRUE,
+      n_samples = 2L, n_cells = 500L
+    )
+  )
+  cnv <- scRDSreport:::.module_by_id(unconfirmed, "cnv")
+  expect_false(cnv$eligible)
+  expect_equal(cnv$reason, "cnv_genome_assembly_confirmation_required")
+
+  confirmed <- scRDSreport:::.build_analysis_plan(
+    report_config(
+      cnv_reference = "Normal",
+      module_options = list(cnv = list(object_genome_assembly = "mm10"))
+    ),
+    context = list(
+      species = "mouse", has_annotation = TRUE, has_clusters = TRUE,
+      n_samples = 2L, n_cells = 500L
+    )
+  )
+  expect_true(scRDSreport:::.module_by_id(confirmed, "cnv")$eligible)
 })
 
 test_that("unknown species leave species-dependent modules visible but ineligible", {
@@ -199,7 +238,7 @@ test_that("unknown species leave species-dependent modules visible but ineligibl
   expect_equal(scRDSreport:::.module_by_id(plan, "enrichment")$reason,
                "enrichment_resources_unavailable")
   expect_equal(scRDSreport:::.module_by_id(plan, "communication")$reason,
-               "cellchat_database_unavailable")
+               "communication_context_only")
   expect_equal(scRDSreport:::.module_by_id(plan, "cell_cycle")$reason,
                "cell_cycle_resources_unavailable")
 })

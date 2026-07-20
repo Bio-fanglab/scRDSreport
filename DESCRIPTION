@@ -1,7 +1,7 @@
 Package: scRDSreport
 Type: Package
 Title: Reproducible Reports from Single-Cell RDS Files
-Version: 0.3.0
+Version: 0.3.1
 Authors@R: person("Anbuengsi", role = c("aut", "cre"), email = "an.bunengsi@qq.com")
 Description: Builds reproducible, self-contained single-cell RNA sequencing
     reports from RDS files. Existing Seurat analyses and annotations are

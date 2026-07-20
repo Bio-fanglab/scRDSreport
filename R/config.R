@@ -164,8 +164,9 @@
 #'   never overwrites an existing metadata column and never substitutes a
 #'   reference from another species.
 #' @param differential Differential-analysis strategy. `"auto"` selects a
-#'   replicate-aware pseudobulk method when possible and otherwise records an
-#'   explicitly exploratory fallback. Other accepted values are
+#'   replicate-aware pseudobulk method when possible and otherwise exports a
+#'   bounded, explicitly descriptive effect-size fallback without P values or
+#'   FDR. Other accepted values are
 #'   `"pseudobulk"`, `"wilcox"`, and `"none"`.
 #' @param trajectory_root Optional Monocle root definition: one principal-node
 #'   value or a named list describing root cells, markers, or a metadata group.
@@ -175,6 +176,9 @@
 #' @param module_options Named list keyed by canonical module ID. Each value is
 #'   a named list passed only to that module, for example
 #'   `list(qc = list(filter = TRUE), pseudotime = list(max_cells = 5000))`.
+#'   Before CNV inference with a built-in coordinate resource, declare the
+#'   input build with `cnv = list(object_genome_assembly = "GRCh38/hg38")`
+#'   or explicitly confirm it after verification.
 #' @param limits Named resource-limit list. Supported fields are
 #'   `analysis_max_cells`, `analysis_max_features`, `plot_max_cells`,
 #'   `marker_max_cells_per_ident`, `min_cells_per_group`, `workers`, and
@@ -214,9 +218,23 @@ report_config <- function(
     profile = profile,
     modules = .normalize_module_selection(modules, profile),
     annotation = list(mode = annotation_mode),
-    differential = list(strategy = differential),
-    trajectory = list(root = .normalize_trajectory_root(trajectory_root)),
-    cnv = list(reference_groups = .normalize_cnv_reference(cnv_reference)),
+    differential = list(
+      strategy = differential,
+      fallback_grouping = c("group", "annotation", "cluster"),
+      max_contrasts = 6L,
+      run_group_markers = TRUE,
+      max_marker_groups = 20L
+    ),
+    enrichment = list(descriptive_rank_summary = TRUE),
+    trajectory = list(
+      root = .normalize_trajectory_root(trajectory_root),
+      export_geometry_without_root = TRUE
+    ),
+    communication = list(export_group_overview = TRUE),
+    cnv = list(
+      reference_groups = .normalize_cnv_reference(cnv_reference),
+      export_readiness = TRUE
+    ),
     resource_overrides = resource_overrides,
     module_options = module_options,
     limits = .normalize_report_limits(limits)

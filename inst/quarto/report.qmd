@@ -13,8 +13,7 @@ format:
     toc-title: "目录"
     toc-location: left
     toc-depth: 4
-    toc-float:
-      collapsed: true
+    toc-expand: true
     number-sections: true
     theme: [lumen, report.scss]
     fontsize: 15pt
@@ -248,15 +247,170 @@ column_dictionary <- function(x, definitions = list()) {
   )
 }
 
-statistics_text <- function(label, module_id = "") {
+summary_flag <- function(summary, name) {
+  value <- if (is.data.frame(summary) && name %in% names(summary)) {
+    summary[[name]]
+  } else if (is.list(summary)) {
+    summary[[name]]
+  } else {
+    NULL
+  }
+  if (is.null(value) || !length(value)) return(NA)
+  value <- tolower(as.character(value[[1L]]))
+  if (value %in% c("true", "t", "1", "yes")) return(TRUE)
+  if (value %in% c("false", "f", "0", "no")) return(FALSE)
+  NA
+}
+
+differential_statistics_text <- function(table = NULL, label = "") {
+  info <- module_get("differential")
+  summary <- info$summary %||% list()
+  column_names <- if (is.null(table)) character() else names(table)
+  has_p <- any(grepl(
+    "p_val|pvalue|p[.]value|pvalue|padj|fdr|qvalue|p[._]?adjust",
+    column_names,
+    ignore.case = TRUE
+  ))
+  has_effect <- any(grepl("avg_log|log2?fc|fold.?change|^logfc$", column_names, ignore.case = TRUE))
+  analysis_types <- if (!is.null(table) && "analysis_type" %in% column_names) {
+    unique(tolower(as.character(table$analysis_type)))
+  } else {
+    character()
+  }
+  analysis_types <- analysis_types[!is.na(analysis_types) & nzchar(analysis_types)]
+  descriptive_type <- any(grepl("descriptive|effect_size|none_descriptive", analysis_types))
+  wilcox_type <- any(grepl("wilcox", analysis_types))
+  inferential_type <- any(grepl("pseudobulk|edger|inferential", analysis_types))
+
+  # An actual result table is authoritative. In particular, effect-size-only
+  # fallbacks must never acquire P/FDR language just because module status is
+  # `partial` instead of `needs_input`.
+  if (!is.null(table)) {
+    if (!has_p && (has_effect || descriptive_type)) {
+      return("本表仅报告组内汇总后的 pooled CPM 和 log fold change 等描述性效应量；pooled CPM 不是样本级 CPM 的算术平均。没有执行显著性检验，也没有生成 P 值或 FDR。")
+    }
+    if (has_p && wilcox_type) {
+      return("本表包含显式请求的细胞级 Wilcoxon P 值和校正值；这些结果属于探索性分析，不能替代生物学重复水平的推断。")
+    }
+    if (has_p && inferential_type) {
+      return("本表包含重复水平 pseudobulk 推断的 log fold change、P 值和 FDR；请结合 analysis_type、样本设计和比较方向解读。")
+    }
+    if (has_p) {
+      return("本表包含效应量和显著性字段；检验层级与方法必须以 analysis_type、样本设计和模块参数为准。")
+    }
+  }
+
+  inferential <- summary_flag(summary, "inferential")
+  wilcox <- summary_flag(summary, "wilcox")
+  descriptive_label <- grepl("descriptive|effect.?size", label, ignore.case = TRUE)
+  if (descriptive_label || descriptive_type ||
+      (identical(inferential, FALSE) && !identical(wilcox, TRUE)) ||
+      identical(info$status, "needs_input")) {
+    return("当前展示的是描述性表达效应量，不包含正式显著性检验、P 值或 FDR；需要可靠生物学重复和经确认的样本设计才能进行组间推断。")
+  }
+  if (identical(wilcox, TRUE) || wilcox_type) {
+    return("模块包含显式请求的细胞级 Wilcoxon 结果；P 值属于探索性证据，不能替代生物学重复水平的推断。")
+  }
+  "差异结果可能包含 log fold change、P 值和 FDR；具体统计层级与方法以 analysis_type 和样本设计为准。"
+}
+
+artifact_context <- function(label, module_id = "", table = NULL) {
+  analysis_types <- if (!is.null(table) && "analysis_type" %in% names(table)) {
+    unique(as.character(table$analysis_type))
+  } else {
+    character()
+  }
+  paste(
+    tolower(safe_text(label)),
+    tolower(module_id),
+    tolower(paste(names(table %||% data.frame()), collapse = " ")),
+    tolower(paste(analysis_types, collapse = " "))
+  )
+}
+
+fallback_statistics_text <- function(label, module_id = "", table = NULL) {
+  context <- artifact_context(label, module_id, table)
+  if (identical(module_id, "differential") &&
+      grepl("pseudobulk (counts|sample design)|differential contrast registry", context)) {
+    return("该表或矩阵记录差异分析的 pseudobulk 输入、样本设计或比较索引；它不是差异检验结果，本身不包含效应量、P 值或 FDR。")
+  }
+  if (identical(module_id, "enrichment") &&
+      grepl("descriptive_gene_set_effect_summary|descriptive gene-set.*effect|mean_absolute_logfc", context)) {
+    return("该表汇总基因集成员的表达效应量，仅用于描述方向和幅度；它不是富集显著性检验，不包含 P 值或 FDR。")
+  }
+  if (identical(module_id, "enrichment") && grepl("gsva|gene.?set score", context)) {
+    return("该表记录每个基因集在各 pseudobulk 样本中的 GSVA 分数；分数用于描述样本间活性模式，本表没有执行组间检验，也不包含 P 值或 FDR。")
+  }
+  if (identical(module_id, "enrichment") &&
+      grepl("gene-set (resource provenance|membership)|identifier mapping", context)) {
+    return("该表记录基因集资源、成员关系或标识符映射，不是富集分析结果，也不包含富集显著性。")
+  }
+  if (identical(module_id, "pseudotime") &&
+      grepl("root candidate|trajectory umap geometry|principal graph|geometry_unrooted|candidate_only_requires", context)) {
+    return("该表只描述未定向的轨迹几何或候选根信息；尚未选择有效生物学根，因此没有定向伪时间、起点或先后顺序。")
+  }
+  if (identical(module_id, "pseudotime") && grepl("graph-associated|morans_i", context)) {
+    return("Moran's I 和 q 值描述 feature 与未定向主图的空间关联；它们不定义轨迹根，也不代表定向伪时间变化。")
+  }
+  if (identical(module_id, "communication") &&
+      grepl("grouping context|grouping_role|eligible_for_cellchat|cellchat analyzed groups", context)) {
+    return("该表仅汇总供检查的分组及细胞数；它不包含配体-受体关系、通讯概率或细胞通讯推断。")
+  }
+  if (identical(module_id, "communication") &&
+      grepl("cellchat diagnostic|diagnostic_message|biological_interpretation", context)) {
+    return("该表只记录 CellChat 计算流程的诊断状态；它不包含通讯推断，空结果也不是生物学上不存在通讯的证据。")
+  }
+  if (identical(module_id, "cnv") &&
+      grepl("cnv readiness|matched gene order|observed groups for cnv|inference_run|reference_selected", context)) {
+    return("该表仅检查 inferCNV 所需资源、分组或基因坐标是否就绪；没有运行 CNV 推断，也不包含任何 CNV 信号。")
+  }
+  NULL
+}
+
+how_to_read_text <- function(label, module_id = "", table = NULL) {
+  context <- artifact_context(label, module_id, table)
+  if (identical(module_id, "differential") &&
+      grepl("pseudobulk (counts|sample design)|differential contrast registry", context)) {
+    return("用该表核对样本、分组、比较方向和 pseudobulk 输入是否正确；不要把设计表、索引或计数矩阵当作差异基因结果。")
+  }
+  if (identical(module_id, "enrichment") &&
+      grepl("descriptive_gene_set_effect_summary|descriptive gene-set.*effect|mean_absolute_logfc", context)) {
+    return("比较 mean_logFC、mean_absolute_logFC 和 dominant_direction 了解描述性方向与幅度；不要按显著性结果解读或筛选。")
+  }
+  if (identical(module_id, "enrichment") && grepl("gsva|gene.?set score", context)) {
+    return("按行比较同一基因集在不同 pseudobulk 样本中的分数；若要做组间推断，需要经确认的样本设计和足够生物学重复。")
+  }
+  if (identical(module_id, "pseudotime") &&
+      grepl("root candidate|trajectory umap geometry|principal graph|geometry_unrooted|candidate_only_requires", context)) {
+    return("先检查几何坐标、图连接和候选分组，再依据实验背景显式指定生物学根；当前行序和坐标不能当作时间顺序。")
+  }
+  if (identical(module_id, "communication") &&
+      grepl("grouping context|grouping_role|eligible_for_cellchat|cellchat analyzed groups|cellchat diagnostic|diagnostic_message", context)) {
+    return("用该表核对分组是否可用于后续 CellChat 及计算失败位置；只有正式配体-受体或网络结果表才能用于通讯解读。")
+  }
+  if (identical(module_id, "cnv") &&
+      grepl("cnv readiness|matched gene order|observed groups for cnv|inference_run|reference_selected", context)) {
+    return("逐项核对 counts、注释、正常参考组和基因坐标；全部前提满足并实际运行 inferCNV 后，才能查看 CNV 信号。")
+  }
+  if (!is.null(table) && any(grepl(
+    "p_val|pvalue|p[.]value|padj|fdr|qvalue|p[._]?adjust",
+    names(table), ignore.case = TRUE
+  ))) {
+    return("先核对记录单位、分组和比较方向，再查看效应量及显著性字段，并结合模块状态与实验设计解释。")
+  }
+  "先核对表格的记录单位、标识列、分组列和字段字典，再结合模块状态、方法与完整结果文件解读。"
+}
+
+statistics_text <- function(label, module_id = "", table = NULL) {
   value <- tolower(paste(label, module_id))
+  fallback_text <- fallback_statistics_text(label, module_id, table)
+  if (!is.null(fallback_text)) return(fallback_text)
+  if (identical(module_id, "differential") || grepl("differential|volcano|deg", value)) {
+    return(differential_statistics_text(table, label))
+  }
   if (grepl("marker", value)) {
     return("聚类 marker 表中的 log fold change、P 值和 FDR 来自细胞级 marker 检验，用于描述聚类特征，不是生物学重复水平的组间推断。")
   }
-  if (identical(module_id, "differential") && identical(module_get("differential")$status, "needs_input")) {
-    return("当前样本设计尚待确认；本表只报告 CPM、log fold change 等描述性效应量，不提供推断性 P 值或 FDR。")
-  }
-  if (grepl("differential|volcano|deg", value)) return("重点统计量通常包括 log fold change、P 值和校正后的 FDR；是否属于重复水平推断以 analysis_type 为准。")
   if (grepl("enrich|gsea|kegg|go", value)) return("重点统计量通常包括富集分数、命中基因比例和多重检验校正值。")
   if (grepl("pseudotime|trajectory", value)) return("重点统计量是相对伪时间、分支和沿轨迹变化的检验结果。")
   if (grepl("communication|cellchat|ligand|receptor", value)) return("重点统计量是配体受体关系、通讯概率或网络权重。")
@@ -290,7 +444,7 @@ render_table_block <- function(x, row_text, label = "", module_id = "", file_ind
   # complete, checksummed artifact; only the in-browser DT preview is capped.
   if (nrow(x) > 1000L) x <- utils::head(x, 1000L)
   column_text <- paste0("共 ", ncol(x), " 列。每列定义见下方数据字典。")
-  if (is.null(how)) how <- "先核对分组、方向和显著性列，再结合图形与实验设计解释。"
+  if (is.null(how)) how <- how_to_read_text(label, module_id, x)
   if (is.null(caveat)) caveat <- "交互表可能是行数受限的预览。正式分析和复用应下载完整文件。"
   htmltools::tagList(
     preview_notice(x, file_index = file_index, total_rows = total_rows),
@@ -298,7 +452,7 @@ render_table_block <- function(x, row_text, label = "", module_id = "", file_ind
     interpretation_panel(
       rows = row_text,
       columns = column_text,
-      statistic = statistics_text(label, module_id),
+      statistic = statistics_text(label, module_id, x),
       how = how,
       caveat = caveat
     ),
@@ -416,6 +570,15 @@ file_module_name <- function(section, label, path) {
   "其他结果"
 }
 
+file_note_cell <- function(x) {
+  note <- safe_text(x, "暂无补充说明。")
+  paste0(
+    "<div class='file-note-scroll' tabindex='0' aria-label='文件说明'>",
+    htmltools::htmlEscape(note),
+    "</div>"
+  )
+}
+
 file_table <- data.frame(
   module = if (nrow(files)) mapply(file_module_name, files$section, files$label, files$path, USE.NAMES = FALSE) else character(),
   content = files$label,
@@ -427,7 +590,7 @@ file_table <- data.frame(
     ifelse(!is.na(files$complete) & files$complete, "已完成（未记录哈希）", "未校验")
   ),
   storage = ifelse(files$embedded, "HTML 内置", "output 文件"),
-  note = files$note,
+  note = vapply(files$note, file_note_cell, character(1)),
   download = vapply(seq_len(nrow(files)), download_link, character(1)),
   check.names = FALSE,
   stringsAsFactors = FALSE
@@ -649,7 +812,7 @@ render_module_tables <- function(id, max_tables = 3L, max_rows = 2000L) {
         row_text = paste0("每行代表 ", files$label[index], " 中的一条结果记录。"),
         label = files$label[index], module_id = id,
         file_index = index, total_rows = files$rows[index],
-        how = "先核对标识列和分组列，再查看效应方向、统计量与校正显著性。",
+        how = how_to_read_text(files$label[index], id, table),
         caveat = "该交互表是报告预览。完整行数、原始精度和全部字段以下载文件为准。"
       ))
     }
@@ -728,7 +891,8 @@ render_file_index <- function(indices, empty_status = "missing") {
   indices <- unique(indices[!is.na(indices) & indices >= 1L & indices <= nrow(file_table)])
   if (!length(indices)) return(module_empty(empty_status, "本模块没有登记结果文件。"))
   table <- file_table[indices, , drop = FALSE]
-  htmltools::tagList(
+  htmltools::div(
+    class = "file-index-view",
     htmltools::div(
       class = "preview-notice",
       htmltools::span("该表是完整文件索引。复制和 CSV/Excel 按钮导出的是索引；每行右侧按钮下载对应的完整结果文件。")
@@ -940,9 +1104,32 @@ render_qc_plot <- function() {
 differential_index <- function() {
   candidates <- table_file_indices(module_get("differential")$indices)
   if (!length(candidates)) return(NA_integer_)
-  labels <- tolower(paste(files$label[candidates], files$path[candidates]))
-  preferred <- candidates[grepl("differential|marker|deg|detest", labels)]
-  if (length(preferred)) preferred[[1L]] else candidates[[1L]]
+  labels <- tolower(paste(
+    files$label[candidates], basename(as.character(files$path[candidates]))
+  ))
+  non_result <- grepl(
+    "pseudobulk (counts|sample design)|contrast registry|row names|column names|metadata|provenance|mapping",
+    labels
+  )
+  named_results <- grepl(
+    "differential result|exploratory marker|findmarkers|(^|[^a-z])(deg|detest|de)([^a-z]|$)",
+    labels
+  )
+  ordered <- unique(c(candidates[named_results & !non_result], candidates[!non_result]))
+  descriptive_index <- NA_integer_
+  for (index in ordered) {
+    table <- read_report_table(index, nrows = 10L)
+    if (is.null(table) || !nrow(table)) next
+    column_names <- names(table)
+    has_fc <- any(grepl("avg_log|log2?fc|fold.?change|^logfc$", column_names, ignore.case = TRUE))
+    has_p <- any(grepl(
+      "p_val|pvalue|p[.]value|padj|fdr|qvalue|p[._]?adjust",
+      column_names, ignore.case = TRUE
+    ))
+    if (has_fc && has_p) return(index)
+    if (has_fc && is.na(descriptive_index)) descriptive_index <- index
+  }
+  descriptive_index
 }
 
 render_volcano <- function() {
@@ -952,7 +1139,13 @@ render_volcano <- function() {
   fc_col <- grep("avg_log|log2?fc|fold.?change", names(table), value = TRUE, ignore.case = TRUE)[1]
   p_col <- grep("p_val_adj|padj|fdr|qvalue|p[._]?adjust", names(table), value = TRUE, ignore.case = TRUE)[1]
   if (is.na(p_col)) p_col <- grep("p_val|pvalue|p[.]value", names(table), value = TRUE, ignore.case = TRUE)[1]
-  if (is.na(fc_col) || is.na(p_col)) return(module_empty("missing", "差异表缺少可识别的 fold change 或显著性列。"))
+  if (is.na(fc_col)) return(module_empty("missing", "差异表缺少可识别的 fold change 列，无法绘图。"))
+  if (is.na(p_col)) {
+    return(module_empty(
+      module_get("differential")$status,
+      "当前差异结果是描述性效应量表，不含 P 值或 FDR，因此不生成火山图；请查看下方效应量图和差异结果表。"
+    ))
+  }
   data <- data.frame(
     fold_change = suppressWarnings(as.numeric(table[[fc_col]])),
     p_value = suppressWarnings(as.numeric(table[[p_col]]))
@@ -1670,7 +1863,7 @@ if (!nrow(sample_design)) {
 }
 ```
 
-```{r annotation-and-metadata}
+```{r annotation-and-metadata, results='asis'}
 download_annotation_candidates <- if (generated_annotation) {
   c(table_file_indices(module_get("celltype")$indices), which(files$section == "annotation_analysis"))
 } else {
@@ -1713,7 +1906,7 @@ if ((is.null(annotation_table) || !nrow(annotation_table)) && (is.null(metadata)
 
 ## 对象审计
 
-```{r inventory-before}
+```{r inventory-before, results='asis'}
 if (!is.null(manifest$inventory_before) && nrow(manifest$inventory_before)) {
   print(htmltools::tags$h3("分析前对象"))
   print(render_static_block(

@@ -523,6 +523,37 @@ table.dataTable tbody td,
   vertical-align: top;
 }
 
+/* The complete-file index carries long provenance notes. Give that column
+   usable reading space while keeping every row compact and independently
+   scrollable. The wrapper scopes this behavior to file indexes only. */
+.file-index-view table.dataTable {
+  min-width: 86rem !important;
+}
+
+.file-index-view table.dataTable th:nth-child(7),
+.file-index-view table.dataTable td:nth-child(7) {
+  width: 24rem !important;
+  min-width: 24rem !important;
+  max-width: 24rem !important;
+}
+
+.file-note-scroll {
+  box-sizing: border-box;
+  height: 5.2rem;
+  padding-right: 0.35rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.file-note-scroll:focus-visible {
+  outline: 2px solid var(--report-blue);
+  outline-offset: 2px;
+}
+
 table.dataTable.stripe > tbody > tr.odd > *,
 table.dataTable.display > tbody > tr.odd > * {
   box-shadow: inset 0 0 0 9999px #f8fafb !important;

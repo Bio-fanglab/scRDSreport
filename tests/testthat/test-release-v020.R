@@ -151,8 +151,8 @@ test_that("unreviewed automatic sample groups never trigger inferential DE", {
     verbose = FALSE
   )
 
-  expect_equal(result$status, "needs_input")
-  expect_equal(result$reason_code, "sample_design_needs_review")
+  expect_equal(result$status, "partial")
+  expect_equal(result$reason_code, "sample_design_needs_review_descriptive_completed")
   expect_false(result$details$inferential)
   expect_true(result$details$design_needs_review)
   rankings <- scRDSreport:::.fa_get_analysis_misc(result$object, "differential_rankings")
@@ -300,8 +300,10 @@ test_that("missing TxDb resources stop CNV before any dense conversion", {
     verbose = FALSE,
     species = "unknown"
   )
-  expect_true(result$status %in% c("skipped", "needs_input"))
-  expect_true(result$reason_code %in% c("dependency_missing", "gene_order_missing"))
+  expect_true(result$status %in% c("partial", "skipped", "needs_input"))
+  expect_true(result$reason_code %in% c(
+    "dependency_missing_readiness_exported", "dependency_missing", "gene_order_missing"
+  ))
   output_counts <- scRDSreport:::.fa_matrix(result$object, "counts")
   expect_s4_class(output_counts, "sparseMatrix")
   expect_identical(dim(output_counts), input_dimensions)

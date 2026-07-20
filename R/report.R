@@ -633,6 +633,12 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
           species = selected_species,
           has_annotation = length(original_annotation_columns) > 0L,
           has_clusters = length(.cluster_columns(.seurat_metadata(object))) > 0L,
+          has_group = !is.null(.fa_group_column(
+            object, .fa_module_config(config, "differential")
+          )),
+          has_cell_cycle_scores = all(
+            c("S.Score", "G2M.Score", "Phase") %in% names(.seurat_metadata(object))
+          ),
           n_samples = nrow(inferred$design),
           n_cells = ncol(object)
         ),
@@ -758,7 +764,11 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
     stringsAsFactors = FALSE
   )
   package_version <- dependency_table$version[dependency_table$package == "scRDSreport"]
-  if (is.na(package_version) || !length(package_version)) package_version <- "0.3.0"
+  if (!length(package_version) || is.na(package_version[[1L]]) || !nzchar(package_version[[1L]])) {
+    package_version <- "0.3.1"
+  } else {
+    package_version <- package_version[[1L]]
+  }
   created_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z")
   input_sha256 <- .sha256_file(input)
   hash_token <- if (length(input_sha256) && !is.na(input_sha256) && nzchar(input_sha256)) {

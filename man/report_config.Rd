@@ -30,8 +30,9 @@ never overwrites an existing metadata column and never substitutes a
 reference from another species.}
 
 \item{differential}{Differential-analysis strategy. `"auto"` selects a
-replicate-aware pseudobulk method when possible and otherwise records an
-explicitly exploratory fallback. Other accepted values are
+replicate-aware pseudobulk method when possible and otherwise exports a
+bounded, explicitly descriptive effect-size fallback without P values or
+FDR. Other accepted values are
 `"pseudobulk"`, `"wilcox"`, and `"none"`.}
 
 \item{trajectory_root}{Optional Monocle root definition: one principal-node
@@ -44,7 +45,10 @@ References are never guessed.}
 
 \item{module_options}{Named list keyed by canonical module ID. Each value is
 a named list passed only to that module, for example
-`list(qc = list(filter = TRUE), pseudotime = list(max_cells = 5000))`.}
+`list(qc = list(filter = TRUE), pseudotime = list(max_cells = 5000))`.
+Before CNV inference with a built-in coordinate resource, declare the
+input build with `cnv = list(object_genome_assembly = "GRCh38/hg38")`
+or explicitly confirm it after verification.}
 
 \item{limits}{Named resource-limit list. Supported fields are
 `analysis_max_cells`, `analysis_max_features`, `plot_max_cells`,
