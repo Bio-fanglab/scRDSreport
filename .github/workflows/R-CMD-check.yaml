@@ -34,6 +34,11 @@ jobs:
             bioc::SummarizedExperiment
             github::zhanghao-njmu/SCP
           needs: check
+      - name: Install package and verify the hard dependency chain
+        run: |
+          R CMD INSTALL .
+          Rscript -e 'library(scRDSreport); check_dependencies(profile = "report_only", render = TRUE, strict = TRUE)'
+          Rscript -e 'library(scRDSreport); plan <- install_dependencies(profile = "full", species = "mouse", render = TRUE, dry_run = TRUE); stopifnot(nrow(plan) > 0L, !anyNA(plan$action))'
       - uses: r-lib/actions/check-r-package@v2
         with:
           upload-snapshots: true

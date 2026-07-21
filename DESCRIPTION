@@ -1,7 +1,7 @@
 Package: scRDSreport
 Type: Package
 Title: Reproducible Reports from Single-Cell RDS Files
-Version: 0.3.1
+Version: 0.3.2
 Authors@R: person("Anbuengsi", role = c("aut", "cre"), email = "an.bunengsi@qq.com")
 Description: Builds reproducible, self-contained single-cell RNA sequencing
     reports from RDS files. Existing Seurat analyses and annotations are
@@ -18,7 +18,7 @@ Description: Builds reproducible, self-contained single-cell RNA sequencing
     and replicates with confidence flags instead of inventing study design.
 License: MIT + file LICENSE
 Encoding: UTF-8
-Depends: R (>= 4.1.0)
+Depends: R (>= 4.2.0)
 Imports:
     BiocParallel,
     digest,
@@ -39,23 +39,16 @@ Imports:
 Suggests:
     AnnotationDbi,
     babelgene,
+    BiocManager,
+    BPCells,
     CellChat,
     celldex,
-    circlize,
     clusterProfiler,
-    ComplexHeatmap,
-    data.table,
-    dplyr,
     edgeR,
-    enrichplot,
-    future,
     GenomicFeatures,
-    ggrepel,
     GSVA,
-    htmlwidgets,
     igraph,
     infercnv,
-    KEGG.db,
     msigdbr,
     monocle3,
     org.Hs.eg.db,
@@ -67,24 +60,25 @@ Suggests:
     org.Gg.eg.db,
     org.Cf.eg.db,
     org.Mmu.eg.db,
-    plotly,
     quarto,
+    remotes,
     rtracklayer,
-    scales,
     scrapper,
-    SeuratWrappers,
     SingleCellExperiment,
     SingleR,
-    stringr,
     SummarizedExperiment,
-    tidyr,
     TxDb.Hsapiens.UCSC.hg38.knownGene,
     TxDb.Mmusculus.UCSC.mm10.knownGene,
-    testthat (>= 3.0.0)
+    testthat (>= 3.2.0)
 Remotes:
-    zhanghao-njmu/SCP
+    zhanghao-njmu/SCP,
+    jinworks/CellChat,
+    cole-trapnell-lab/monocle3,
+    bnprks/BPCells/r
 URL: https://github.com/Bio-fanglab/scRDSreport
 BugReports: https://github.com/Bio-fanglab/scRDSreport/issues
-SystemRequirements: Quarto CLI (>= 1.3)
+SystemRequirements: Quarto CLI (>= 1.3); optional full-profile modules:
+    JAGS (>= 4.0), HDF5 development libraries (detectable through h5cc or
+    pkg-config)
 Config/testthat/edition: 3
 Config/roxygen2/version: 8.0.0

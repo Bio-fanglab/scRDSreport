@@ -163,6 +163,24 @@
     }
   }, add = TRUE)
 
+  # Quarto/Deno otherwise writes Sass and KV caches under the user's HOME.
+  # Keep report rendering usable in containers, CI, and read-only home
+  # directories by giving both rendering paths an output-local cache.
+  restore_env <- character()
+  if (!nzchar(Sys.getenv("DENO_DIR"))) {
+    deno_cache <- file.path(output, ".report", "deno-cache")
+    dir.create(deno_cache, recursive = TRUE, showWarnings = FALSE)
+    Sys.setenv(DENO_DIR = deno_cache)
+    restore_env <- c(restore_env, "DENO_DIR")
+  }
+  if (!nzchar(Sys.getenv("XDG_CACHE_HOME"))) {
+    quarto_cache <- file.path(output, ".report", "cache")
+    dir.create(quarto_cache, recursive = TRUE, showWarnings = FALSE)
+    Sys.setenv(XDG_CACHE_HOME = quarto_cache)
+    restore_env <- c(restore_env, "XDG_CACHE_HOME")
+  }
+  if (length(restore_env)) on.exit(Sys.unsetenv(restore_env), add = TRUE)
+
   if (requireNamespace("quarto", quietly = TRUE)) {
     .sc_message(verbose, "Rendering Quarto HTML report...")
     quarto::quarto_render(
@@ -197,19 +215,6 @@
     sibling_sass <- file.path(dirname(quarto_bin), "sass")
     sibling_esbuild <- file.path(dirname(quarto_bin), "esbuild")
     inferred_share <- file.path(quarto_prefix, "share", "quarto")
-    restore_env <- character()
-    if (!nzchar(Sys.getenv("DENO_DIR"))) {
-      deno_cache <- file.path(output, ".report", "deno-cache")
-      dir.create(deno_cache, recursive = TRUE, showWarnings = FALSE)
-      Sys.setenv(DENO_DIR = deno_cache)
-      restore_env <- c(restore_env, "DENO_DIR")
-    }
-    if (!nzchar(Sys.getenv("XDG_CACHE_HOME"))) {
-      quarto_cache <- file.path(output, ".report", "cache")
-      dir.create(quarto_cache, recursive = TRUE, showWarnings = FALSE)
-      Sys.setenv(XDG_CACHE_HOME = quarto_cache)
-      restore_env <- c(restore_env, "XDG_CACHE_HOME")
-    }
     if (!nzchar(Sys.getenv("QUARTO_DENO")) && file.exists(sibling_deno)) {
       Sys.setenv(QUARTO_DENO = sibling_deno)
       restore_env <- c(restore_env, "QUARTO_DENO")
@@ -245,7 +250,6 @@
       if (!file.exists(compat_pandoc)) file.symlink(sibling_pandoc, compat_pandoc)
       quarto_bin <- file.path(compat_bin, "quarto")
     }
-    if (length(restore_env)) on.exit(Sys.unsetenv(restore_env), add = TRUE)
     params_path <- file.path(output, ".report", "params.yml")
     writeLines(c(
       "manifest:", paste0("  ", normalizePath(manifest_path)),
@@ -750,8 +754,9 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
     "scRDSreport", "SCP", "Seurat", "SeuratObject", "Matrix", "DT",
     "AnnotationDbi", "SingleR", "celldex", "edgeR", "clusterProfiler", "GSVA",
     "msigdbr", "babelgene",
-    "monocle3", "SeuratWrappers", "CellChat", "infercnv",
-    "ComplexHeatmap", "plotly", "quarto", resource_dependency_names
+    "monocle3", "SingleCellExperiment", "SummarizedExperiment",
+    "CellChat", "infercnv", "GenomicFeatures", "rtracklayer", "quarto",
+    resource_dependency_names
   )
   dependency_names <- unique(dependency_names[!is.na(dependency_names) & nzchar(dependency_names)])
   dependency_table <- data.frame(
@@ -765,7 +770,7 @@ running <- function(input, output, sample_col = NULL, sample_map = NULL,
   )
   package_version <- dependency_table$version[dependency_table$package == "scRDSreport"]
   if (!length(package_version) || is.na(package_version[[1L]]) || !nzchar(package_version[[1L]])) {
-    package_version <- "0.3.1"
+    package_version <- "0.3.2"
   } else {
     package_version <- package_version[[1L]]
   }

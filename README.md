@@ -35,60 +35,80 @@ FASTQ + samplesheet
 
 ## 安装
 
-需要 R >= 4.1 和 [Quarto CLI >= 1.3](https://quarto.org/docs/get-started/)。以下是生成报告、运行 Seurat/SCP 核心流程所需的安装层：
+需要 R >= 4.2。安装器会自动处理 R 包，但不会静默安装操作系统软件；开始前请按实际模块准备以下项目：
+
+- 生成 HTML 需要按官方说明安装 [Quarto CLI >= 1.3](https://quarto.org/docs/get-started/)；安装名为 `quarto` 的 R 包并不等于安装了 Quarto CLI。
+- `infercnv` 模块需要 JAGS 4.x。
+- 当前 Monocle 3/BPCells 自动安装路径需要可由 `h5cc` 或 `pkg-config` 检出的 HDF5 开发库；安装最新版还需要 R >= 4.4.1 和 Bioconductor >= 3.21。较旧 R 上已能加载的兼容 Monocle 3 仍可继续使用。
+
+### 方式 A：新环境一键安装（推荐）
+
+仓库中的 bootstrap 把“安装 scRDSreport 及硬依赖 → 按 profile/物种安装分析依赖 → 实际加载并严格验收”合成一次调用。`species = "auto"` 在 full/core 档必须同时给出输入 RDS。建议先打开脚本链接检查内容，再运行：
 
 ```r
-install.packages(c("BiocManager", "remotes", "quarto"))
+source("https://raw.githubusercontent.com/Bio-fanglab/scRDSreport/main/inst/install_scRDSreport.R")
 
-BiocManager::install("BiocParallel", ask = FALSE, update = FALSE)
-remotes::install_github("zhanghao-njmu/SCP", dependencies = NA)
-remotes::install_github(
-  "Bio-fanglab/scRDSreport",
-  dependencies = NA,
-  upgrade = "never"
+install_scRDSreport(
+  input = "path/to/object.rds",
+  profile = "full",
+  species = "auto"
 )
 ```
 
-`full` 中的高级章节使用可选依赖。希望尽可能运行全部模块时，再安装下面这一层：
+不需要 HTML 时可设 `render = FALSE`。如果只想安装核心或报告依赖，可把 `profile` 改为 `"core"` 或 `"report_only"`。
+
+### 方式 B：分步安装
+
+先安装包本身。这里把 Bioconductor 仓库显式交给 `remotes`，因此 SCP 的 CRAN/Bioconductor 硬依赖会一起解析和安装：
 
 ```r
-install.packages(c(
-  "babelgene", "circlize", "data.table", "dplyr", "future", "ggrepel",
-  "htmlwidgets", "igraph", "msigdbr", "plotly", "scales", "stringr", "tidyr"
-))
+install.packages(c("BiocManager", "remotes"))
 
-BiocManager::install(c(
-  "AnnotationDbi", "celldex", "clusterProfiler", "ComplexHeatmap",
-  "edgeR", "enrichplot", "GenomicFeatures", "GSVA", "infercnv", "rtracklayer",
-  "monocle3", "org.Hs.eg.db", "org.Mm.eg.db", "scrapper",
-  "SingleCellExperiment", "SingleR", "SummarizedExperiment",
-  "TxDb.Hsapiens.UCSC.hg38.knownGene",
-  "TxDb.Mmusculus.UCSC.mm10.knownGene"
-), ask = FALSE, update = FALSE)
-
-remotes::install_github("jinworks/CellChat", dependencies = TRUE)
-remotes::install_github("satijalab/seurat-wrappers", dependencies = TRUE)
+bio_repos <- BiocManager::repositories()
+remotes::install_github(
+  "Bio-fanglab/scRDSreport",
+  dependencies = NA,
+  upgrade = "never",
+  repos = bio_repos
+)
 ```
 
-九个内置物种只需要安装本次数据对应的 OrgDb，不必全部安装：
+再针对本次 RDS 安装完整分析依赖并做真实加载验收。`species = "auto"` 会从输入 RDS 的稳定 feature ID 选择对应的 OrgDb/TxDb；不能可靠判断时会停止并要求显式物种，不会猜成人或小鼠：
 
 ```r
-BiocManager::install(c(
-  "org.Hs.eg.db",   # human
-  "org.Mm.eg.db",   # mouse
-  "org.Rn.eg.db",   # rat
-  "org.Dr.eg.db",   # zebrafish
-  "org.Ss.eg.db",   # pig
-  "org.Bt.eg.db",   # cattle
-  "org.Gg.eg.db",   # chicken
-  "org.Cf.eg.db",   # dog
-  "org.Mmu.eg.db"   # macaque
-), ask = FALSE, update = FALSE)
+input_rds <- "path/to/object.rds"
+
+scRDSreport::install_dependencies(
+  profile = "full",
+  input = input_rds,
+  species = "auto"
+)
+
+scRDSreport::check_dependencies(
+  profile = "full",
+  input = input_rds,
+  species = "auto"
+)
 ```
 
-`KEGG.db` 仅用于仍依赖它的旧版 Bioconductor 兼容路径，可在当前 Bioconductor 仓库仍提供时另行安装。开发和本地检查再安装 `devtools` 与 `testthat`，普通用户不需要这两个包。
+已知是小鼠时不必读取 RDS 来判断物种：
 
-不同 R/Bioconductor 版本可提供的高级包可能不同。缺少某个可选包只会使对应模块被跳过，不影响核心报告和数据导出；实际使用的包版本、警告和跳过原因会写入 manifest。
+```r
+scRDSreport::install_dependencies(profile = "full", species = "mouse")
+```
+
+默认只装本次物种；确实需要在同一环境处理全部九个内置物种时，显式使用 `species = "all"`。这会安装九套 OrgDb，并可能占用较多磁盘空间。安装前可先查看计划，不会写入 library：
+
+```r
+plan <- scRDSreport::install_dependencies(
+  profile = "full",
+  species = "all",
+  dry_run = TRUE
+)
+plan[plan$action != "none", c("component", "source", "action")]
+```
+
+`dependency_status()` 和 `check_dependencies()` 使用 namespace 实际加载结果，不会把“目录存在但因传递依赖缺失而无法加载”的包误判为可用。安装器会自动处理 CRAN、Bioconductor，以及 SCP、CellChat、Monocle 3 的 GitHub 来源。系统项缺失时，它会先完成其余 R 包，再汇总给出未就绪清单。包安装成功也不代表所有生物学前提都成立：轨迹起点、CNV 正常参考、可信注释和实验设计仍需用户提供。开发和本地检查再安装 `testthat`/`devtools`，普通用户不需要。
 
 ## 三种运行档位
 

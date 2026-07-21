@@ -1,6 +1,6 @@
 # 完整分析、统计边界与资源配置
 
-本文说明 `scRDSreport` 0.3.1 的完整分析计划。该包是 FangLab 原 `run_scrnaseq.sh` + `scRNAseq.qmd` 中 RDS 分析与报告阶段的 R 包化增强版：保留原工作流的主要分析章节，把固定的小鼠代码扩展为九种常见物种的资源注册表，并把计算移到 Quarto 渲染之前逐模块执行。最重要的原则是：每个章节先检查数据、物种资源和生物学前提，再决定运行、部分运行或跳过。没有正式推断前提时，程序仍尽量导出描述性、几何或 readiness 结果，但不用虚构注释、重复、P 值、轨迹起点、通讯边或 CNV 参考来填满报告。
+本文说明 `scRDSreport` 0.3.2 的完整分析计划。该包是 FangLab 原 `run_scrnaseq.sh` + `scRNAseq.qmd` 中 RDS 分析与报告阶段的 R 包化增强版：保留原工作流的主要分析章节，把固定的小鼠代码扩展为九种常见物种的资源注册表，并把计算移到 Quarto 渲染之前逐模块执行。最重要的原则是：每个章节先检查数据、物种资源和生物学前提，再决定运行、部分运行或跳过。没有正式推断前提时，程序仍尽量导出描述性、几何或 readiness 结果，但不用虚构注释、重复、P 值、轨迹起点、通讯边或 CNV 参考来填满报告。
 
 本包的输入边界是 RDS，不是 FASTQ：
 
@@ -514,19 +514,20 @@ output/
 
 | 层/模块 | 主要包 |
 |---|---|
-| 核心读取、SCP、报告和下载 | `Seurat`、`SeuratObject`、`SCP`、`Matrix`、`BiocParallel`、`DT`、`ggplot2`、`ggsci`、`quarto`、`knitr`、`htmltools`、`jsonlite`、`digest` |
+| 核心读取、SCP、报告和下载 | `Seurat`、`SeuratObject`、`SCP`、`Matrix`、`BiocParallel`、`DT`、`ggplot2`、`ggsci`、`knitr`、`htmltools`、`jsonlite`、`digest`；渲染另需外部 Quarto CLI |
 | 自动注释 | `SingleR`、`celldex`、`AnnotationDbi`、对应 `org.*.eg.db`；包内可信参考入口当前仅 human/mouse |
 | 重复感知差异 | `edgeR` |
-| GO/KEGG | `clusterProfiler`、`enrichplot`、对应物种 OrgDb |
-| MSigDB/GSEA/GSVA | `msigdbr`、`GSVA`、`ComplexHeatmap`；非人非鼠内置物种使用 human MSigDB 正交投影 |
-| 轨迹 | `monocle3`、`igraph`，必要时 `SeuratWrappers` |
-| 通讯 | `CellChat`、`circlize`、`ComplexHeatmap`；内置 DB 当前仅 human/mouse |
+| GO/KEGG | `clusterProfiler`、`AnnotationDbi`、对应物种 OrgDb |
+| MSigDB/GSEA/GSVA | `msigdbr`、`GSVA`；非人非鼠内置物种使用 human MSigDB 正交投影 |
+| 轨迹 | `monocle3`、`SingleCellExperiment`；`igraph` 用于图结构导出；当前自动安装还需 HDF5 开发库 |
+| 通讯 | `CellChat`；内置 DB 当前仅 human/mouse |
 | cell cycle | Seurat `cc.genes.updated.2019`；非人物种另需 `babelgene` |
-| TF/热图 | `AnnotationDbi`、对应 OrgDb 的 `GOALL:GO:0003700`、`ComplexHeatmap` |
-| CNV | `infercnv`、`GenomicFeatures`、匹配的 TxDb/GTF |
-| 可选交互图和数据整理 | `plotly`、`htmlwidgets`、`data.table`、`dplyr`、`tidyr`、`stringr`、`ggrepel`、`scales`、`future` |
+| TF/热图 | `AnnotationDbi`、对应 OrgDb 的 `GOALL:GO:0003700` |
+| CNV | `infercnv`、JAGS 4.x、`GenomicFeatures`、匹配的 TxDb；GTF 路径另需 `rtracklayer` |
 
 九个 OrgDb 分别是 `org.Hs.eg.db`、`org.Mm.eg.db`、`org.Rn.eg.db`、`org.Dr.eg.db`、`org.Ss.eg.db`、`org.Bt.eg.db`、`org.Gg.eg.db`、`org.Cf.eg.db` 和 `org.Mmu.eg.db`，用户只需安装本次物种对应的包。
+
+`install_dependencies()` 按 profile、module 和物种生成安装计划，分别处理 CRAN、Bioconductor 和 GitHub 包；`check_dependencies()` 会实际加载 namespace 并单独核验 Quarto CLI/JAGS/HDF5。系统软件不会由 R 包静默安装。`species = "auto"` 没有输入 RDS 或不能从稳定 ID 判断时不会任选一个 OrgDb，必须显式给出物种。
 
 可选依赖缺失不会触发静默替代。例如没有 `edgeR` 时不会伪造 edgeR P 值；没有 `babelgene` 时，除明确记录的小鼠大小写不敏感 fallback 外，其他非人物种不会直接借用 human cell-cycle 集合；没有 CellChat 数据库时不会生成通讯网络；没有 `infercnv` 或参考组时不会生成 CNV 热图。报告应把这些情况作为状态和原因呈现。
 

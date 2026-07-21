@@ -1,3 +1,27 @@
+# scRDSreport 0.3.2
+
+- Added `dependency_status()`, `install_dependencies()`, and
+  `check_dependencies()` so a requested report profile can be installed and
+  verified by actually loading every required namespace rather than checking
+  package-directory presence alone.
+- Split installation across CRAN, Bioconductor, and declared GitHub sources,
+  retained the active Bioconductor repositories while installing SCP, and
+  added explicit GitHub routes for CellChat and current Monocle 3.
+- Added input-aware species dependency selection. `species = "auto"` now needs
+  an input RDS before an OrgDb/TxDb is selected; `species = "all"` remains an
+  explicit opt-in for all nine built-in organisms.
+- Added separate checks for the external Quarto CLI, JAGS, and the HDF5 build
+  prerequisite. Installing the R package named `quarto` is no longer presented
+  as installing the CLI.
+- Removed unused direct `Suggests` entries that are either not called by this
+  package or already belong to an analysis engine's transitive dependency
+  declaration, avoiding fragile `dependencies = TRUE` over-installation.
+- Added a standalone bootstrap script for a fresh R session, including a
+  writable user-library fallback and a final strict loadability check.
+- Raised the declared baseline to R 4.2 so it matches the currently required
+  SCP dependency generation; the newest Monocle 3 path has stricter limits
+  documented by the installer.
+
 # scRDSreport 0.3.1
 
 - Made useful, scientifically bounded fallback output the default for advanced
