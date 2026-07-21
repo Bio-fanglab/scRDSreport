@@ -75,7 +75,8 @@ Remotes:
     jinworks/CellChat,
     cole-trapnell-lab/monocle3,
     bnprks/BPCells/r
-URL: https://github.com/Bio-fanglab/scRDSreport
+URL: https://github.com/Bio-fanglab/scRDSreport,
+    https://bio-fanglab.github.io/scRDSreport/
 BugReports: https://github.com/Bio-fanglab/scRDSreport/issues
 SystemRequirements: Quarto CLI (>= 1.3); optional full-profile modules:
     JAGS (>= 4.0), HDF5 development libraries (detectable through h5cc or

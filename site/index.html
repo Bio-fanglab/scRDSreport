@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="scRDSreport 使用 10x Genomics 官方小鼠单细胞数据生成的在线示例报告。">
+  <title>scRDSreport 在线示例</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17324d;
+      --muted: #566b7f;
+      --line: #d8e3ec;
+      --paper: #ffffff;
+      --wash: #f3f8fb;
+      --accent: #1177a3;
+      --accent-dark: #0b587b;
+      --warm: #fff8e7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: linear-gradient(180deg, #edf6fa 0, #fff 32rem);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+      line-height: 1.7;
+    }
+    main { width: min(1040px, calc(100% - 32px)); margin: 0 auto; padding: 64px 0 48px; }
+    .eyebrow { color: var(--accent); font-size: .83rem; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: .25rem 0 .8rem; font-size: clamp(2.5rem, 8vw, 5.4rem); line-height: 1; letter-spacing: -.055em; }
+    .lead { max-width: 760px; margin: 0; color: var(--muted); font-size: clamp(1.05rem, 2vw, 1.28rem); }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 30px 0 42px; }
+    .button { display: inline-flex; align-items: center; min-height: 46px; padding: 0 18px; border: 1px solid var(--accent); border-radius: 8px; color: var(--accent); font-weight: 700; text-decoration: none; }
+    .button.primary { background: var(--accent); color: #fff; }
+    .button:hover { border-color: var(--accent-dark); background: var(--accent-dark); color: #fff; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .card { padding: 22px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.92); box-shadow: 0 10px 28px rgba(34,80,112,.07); }
+    .card h2 { margin: 0 0 8px; font-size: 1.05rem; line-height: 1.35; }
+    .card p { margin: 0; color: var(--muted); font-size: .94rem; }
+    .card a { color: var(--accent-dark); font-weight: 700; }
+    section { margin-top: 42px; }
+    section h2 { margin-bottom: 12px; font-size: 1.4rem; }
+    .notice { padding: 18px 20px; border-left: 4px solid #d69b00; background: var(--warm); color: #5d4a18; }
+    .facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--line); }
+    .fact { padding: 18px; background: var(--paper); }
+    .fact strong { display: block; font-size: 1.45rem; line-height: 1.25; }
+    .fact span { color: var(--muted); font-size: .9rem; }
+    footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: .88rem; }
+    footer a { color: var(--accent-dark); }
+    @media (max-width: 760px) {
+      main { padding-top: 42px; }
+      .grid, .facts { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">10x Genomics public-data example</div>
+      <h1>scRDSreport</h1>
+      <p class="lead">从单细胞 RDS 到可浏览、可追溯、可下载的 Quarto HTML 报告。这个页面展示使用三个 10x Genomics 官方小鼠数据集生成的真实示例。</p>
+      <div class="actions">
+        <a class="button primary" href="report.html">打开交互式报告（约 73 MiB）</a>
+        <a class="button" href="https://github.com/Bio-fanglab/scRDSreport">查看 R 包源码</a>
+        <a class="button" href="https://github.com/Bio-fanglab/scRDSreport/releases/tag/example-report-v1">示例数据与下载</a>
+      </div>
+    </header>
+
+    <div class="facts" aria-label="示例摘要">
+      <div class="fact"><strong>3</strong><span>个 10x 官方公开数据集</span></div>
+      <div class="fact"><strong>2,500</strong><span>个细胞进入公开演示的下游子集</span></div>
+      <div class="fact"><strong>8,000</strong><span>个 features 进入公开演示的下游子集</span></div>
+    </div>
+
+    <section>
+      <h2>数据来源</h2>
+      <div class="grid">
+        <article class="card">
+          <h2>5k Mouse PBMCs</h2>
+          <p>GEM-X Universal 5′ 小鼠外周血单个核细胞。<br><a href="https://www.10xgenomics.com/datasets/5k_Mouse_PBMCs_5p_gem-x">查看 10x 官方页面</a></p>
+        </article>
+        <article class="card">
+          <h2>5k Mouse Splenocytes</h2>
+          <p>GEM-X Universal 5′ 小鼠脾细胞。<br><a href="https://www.10xgenomics.com/datasets/5k_Mouse_Splenocytes_5p_gem-x">查看 10x 官方页面</a></p>
+        </article>
+        <article class="card">
+          <h2>20k Mouse Multiplex</h2>
+          <p>GEM-X Universal 5′ PBMC 与 splenocytes multiplex。<br><a href="https://www.10xgenomics.com/datasets/20k_Mouse_PBMC_Splenocyte_5p_gem-x_multiplex">查看 10x 官方页面</a></p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>如何解读</h2>
+      <div class="notice">三个数据集不是经过验证的生物学重复。示例中的组间差异是描述性效应量与基因排序，不应作为重复感知的统计推断。轨迹、通讯和 CNV 等模块也只在生物学前提满足时给出相应结果。</div>
+      <p>为控制在线演示的计算量，完整下游展示使用固定的 2,500-cell、8,000-feature 子集。报告中的小型结果已内置到 HTML；原始 RDS、分析 RDS 和大型表达矩阵通过同一仓库的 Release 提供下载。</p>
+    </section>
+
+    <footer>
+      数据版权归 10x Genomics，按 <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a> 发布；本项目对数据进行了重新整理和分析。10x Genomics 未参与或认可 scRDSreport。示例由 scRDSreport 0.3.1 生成，公开副本已移除本地文件系统路径。<br>
+      <a href="example-provenance.json">查看机器可读的来源与校验信息</a>
+    </footer>
+  </main>
+</body>
+</html>

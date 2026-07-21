@@ -1,0 +1,52 @@
+name: Deploy example report to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Prepare static site
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp -R site/. _site/
+          touch _site/.nojekyll
+          curl --fail --location --retry 5 --retry-all-errors \
+            --output _site/report.html \
+            https://github.com/Bio-fanglab/scRDSreport/releases/download/example-report-v1/report.html
+          echo "b3b29d655a50423682be3202050239325132fccfa19c27841b2dffeee3efc9c9  _site/report.html" | sha256sum --check
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

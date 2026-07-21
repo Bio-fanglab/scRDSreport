@@ -1,3 +1,4 @@
 ^\.github$
+^site$
 ^.*\.Rproj$
 ^\.Rproj\.user$

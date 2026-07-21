@@ -1,0 +1,60 @@
+{
+  "report": {
+    "file": "report.html",
+    "sha256": "b3b29d655a50423682be3202050239325132fccfa19c27841b2dffeee3efc9c9",
+    "bytes": 76352426,
+    "generated_with": "scRDSreport 0.3.1",
+    "public_copy_changes": [
+      "local filesystem paths removed",
+      "five external output links redirected to GitHub Release assets"
+    ]
+  },
+  "analysis_subset": {
+    "cells": 2500,
+    "features": 8000
+  },
+  "data_license": "CC BY 4.0",
+  "data_attribution": "10x Genomics",
+  "external_downloads": [
+    {
+      "file": "original_combined_raw_matrix.seurat.rds",
+      "bytes": 265106658,
+      "sha256": "8d16a565a82be7580ad36ead45b2d6aee936e803ad5a381eecd89fa282d53f15"
+    },
+    {
+      "file": "analysis_object.rds",
+      "bytes": 53674069,
+      "sha256": "418eff4c28e1491b55a1f51e2ce76dd49104c31e56f7ffa3ca299906303e8abe"
+    },
+    {
+      "file": "original_RNA_counts.mtx.gz",
+      "bytes": 312694484,
+      "sha256": "56aa68c05508979ac59d780b63a650e6c6b26b611bac18675ae236b9b2278728"
+    },
+    {
+      "file": "analysis_RNA_counts.mtx.gz",
+      "bytes": 18316712,
+      "sha256": "88cb8fbe298c69d20fc91b70da5d17a96e883d22cde0b71dcdddcf87dd492255"
+    },
+    {
+      "file": "analysis_RNA_data.mtx.gz",
+      "bytes": 22604664,
+      "sha256": "e835969c32b5295eae9b592ffdff9879d278d13ad08a7cf8bf32982a9f19ae8a"
+    }
+  ],
+  "datasets": [
+    {
+      "name": "5k Mouse PBMCs",
+      "url": "https://www.10xgenomics.com/datasets/5k_Mouse_PBMCs_5p_gem-x"
+    },
+    {
+      "name": "5k Mouse Splenocytes",
+      "url": "https://www.10xgenomics.com/datasets/5k_Mouse_Splenocytes_5p_gem-x"
+    },
+    {
+      "name": "20k Mouse PBMCs and Mouse Splenocytes Multiplex Sample",
+      "url": "https://www.10xgenomics.com/datasets/20k_Mouse_PBMC_Splenocyte_5p_gem-x_multiplex"
+    }
+  ],
+  "release": "https://github.com/Bio-fanglab/scRDSreport/releases/tag/example-report-v1"
+}
