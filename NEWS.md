@@ -80,9 +80,9 @@
   uppercase symbols, species-aware mitochondrial prefiltering for Ensembl-only
   inputs, and a recorded cell-level SingleR fallback when optional cluster
   aggregation support is unavailable.
-- Documented scRDSreport as the RDS-to-report package stage of the FangLab
-  `run_scrnaseq.sh`/`scRNAseq.qmd` workflow. FASTQ alignment, quantification,
-  Cell Ranger, nf-core, and Nextflow remain upstream of the package boundary.
+- Documented scRDSreport as an RDS-to-report R package that inspects supported
+  single-cell objects, optionally completes analysis, exports data products,
+  and renders the final Quarto report.
 
 # scRDSreport 0.2.0
 

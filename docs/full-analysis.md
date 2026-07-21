@@ -1,16 +1,8 @@
 # 完整分析、统计边界与资源配置
 
-本文说明 `scRDSreport` 0.3.2 的完整分析计划。该包是 FangLab 原 `run_scrnaseq.sh` + `scRNAseq.qmd` 中 RDS 分析与报告阶段的 R 包化增强版：保留原工作流的主要分析章节，把固定的小鼠代码扩展为九种常见物种的资源注册表，并把计算移到 Quarto 渲染之前逐模块执行。最重要的原则是：每个章节先检查数据、物种资源和生物学前提，再决定运行、部分运行或跳过。没有正式推断前提时，程序仍尽量导出描述性、几何或 readiness 结果，但不用虚构注释、重复、P 值、轨迹起点、通讯边或 CNV 参考来填满报告。
+本文说明 `scRDSreport` 0.3.2 的完整分析计划。该包读取保存为 RDS 的 Seurat、SingleCellExperiment、表达矩阵或含 counts 的 list，对对象状态和物种资源进行审计，按需补齐分析，并导出模块化结果与 Quarto HTML 报告。九种常见物种使用分层资源注册表，计算在 Quarto 渲染之前逐模块执行。
 
-本包的输入边界是 RDS，不是 FASTQ：
-
-```text
-FASTQ + samplesheet
-  └─ run_scrnaseq.sh / nf-core/scrnaseq / Cell Ranger → 单细胞 RDS
-       └─ scRDSreport::running() → 分析产物 + report.html
-```
-
-因此本包不调用 nf-core、Nextflow、Cell Ranger，也不负责比对和定量。上游流程产生的 Seurat、SingleCellExperiment、表达矩阵或含 counts 的 list RDS 才是 `running()` 的输入。
+最重要的原则是：每个章节先检查数据、物种资源和生物学前提，再决定运行、部分运行或跳过。没有正式推断前提时，程序仍尽量导出描述性、几何或 readiness 结果，但不用虚构注释、重复、P 值、轨迹起点、通讯边或 CNV 参考来填满报告。
 
 ## 1. 一条命令和三个 profile
 
@@ -545,4 +537,4 @@ output/
 8. 差异分析的统计单位是生物学样本；无重复结果没有正式 P 值；
 9. pseudotime 起点和 CNV reference 有生物学依据；
 10. 分析子集、图形抽样和完整下载的边界写入报告；
-11. 大文件是 HTML 内置还是 output 文件，交付方式与报告一致；FASTQ 比对/定量版本属于上游 provenance，不能写成本包完成。
+11. 大文件是 HTML 内置还是 output 文件，交付方式与报告一致；输入对象形成过程的 provenance 应单独记录，不能写成本包完成。
