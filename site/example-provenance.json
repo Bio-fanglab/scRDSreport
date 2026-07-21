@@ -1,12 +1,12 @@
 {
   "report": {
     "file": "report.html",
-    "sha256": "b3b29d655a50423682be3202050239325132fccfa19c27841b2dffeee3efc9c9",
-    "bytes": 76352426,
+    "sha256": "dada7cb4ed66be4470dbf5ff444565686ba9049f7fb736fab0a603c6d56b32da",
+    "bytes": 76352418,
     "generated_with": "scRDSreport 0.3.1",
     "public_copy_changes": [
       "local filesystem paths removed",
-      "five external output links redirected to GitHub Release assets"
+      "five external output links redirected to Biobunensi GitHub Release assets"
     ]
   },
   "analysis_subset": {
@@ -56,5 +56,5 @@
       "url": "https://www.10xgenomics.com/datasets/20k_Mouse_PBMC_Splenocyte_5p_gem-x_multiplex"
     }
   ],
-  "release": "https://github.com/Biobunengsi/scRDSreport/releases/tag/example-report-v1"
+  "release": "https://github.com/Biobunensi/scRDSreport/releases/tag/example-report-v1"
 }

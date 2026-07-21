@@ -36,8 +36,8 @@ jobs:
           touch _site/.nojekyll
           curl --fail --location --retry 5 --retry-all-errors \
             --output _site/report.html \
-            https://github.com/Biobunengsi/scRDSreport/releases/download/example-report-v1/report.html
-          echo "b3b29d655a50423682be3202050239325132fccfa19c27841b2dffeee3efc9c9  _site/report.html" | sha256sum --check
+            https://github.com/Biobunensi/scRDSreport/releases/download/example-report-v1/report.html
+          echo "dada7cb4ed66be4470dbf5ff444565686ba9049f7fb736fab0a603c6d56b32da  _site/report.html" | sha256sum --check
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

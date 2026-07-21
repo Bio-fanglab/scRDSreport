@@ -1,14 +1,14 @@
 # scRDSreport
 
-[![R-CMD-check](https://github.com/Biobunengsi/scRDSreport/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/Biobunengsi/scRDSreport/actions/workflows/R-CMD-check.yaml)
-[![Example report](https://img.shields.io/badge/online-example-1177A3)](https://biobunengsi.github.io/scRDSreport/report.html)
+[![R-CMD-check](https://github.com/Biobunensi/scRDSreport/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/Biobunensi/scRDSreport/actions/workflows/R-CMD-check.yaml)
+[![Example report](https://img.shields.io/badge/online-example-1177A3)](https://biobunensi.github.io/scRDSreport/report.html)
 [![License: MIT](https://img.shields.io/badge/license-MIT-1F6F5C.svg)](LICENSE)
 
 **一个函数，把单细胞 RDS 整理成可浏览、可追溯、可下载的 Quarto HTML 报告。**
 
 `scRDSreport` 会先检查输入对象：已有降维、聚类或细胞注释时优先保留并导出；只有原始或部分处理数据时，可调用 [SCP](https://github.com/zhanghao-njmu/SCP) 补齐基础分析。所有结果写入用户指定的输出文件夹，报告入口固定为 `report.html`。
 
-**[查看 10x Genomics 官方示例数据生成的在线报告](https://biobunengsi.github.io/scRDSreport/report.html)** · [快速开始](#快速开始) · [安装](#安装) · [完整分析说明](docs/full-analysis.md)
+**[查看 10x Genomics 官方示例数据生成的在线报告](https://biobunensi.github.io/scRDSreport/report.html)** · [快速开始](#快速开始) · [安装](#安装) · [完整分析说明](docs/full-analysis.md)
 
 ```r
 library(scRDSreport)
@@ -48,7 +48,7 @@ running(
 
 ```r
 source(
-  "https://raw.githubusercontent.com/Biobunengsi/scRDSreport/main/inst/install_scRDSreport.R"
+  "https://raw.githubusercontent.com/Biobunensi/scRDSreport/main/inst/install_scRDSreport.R"
 )
 
 install_scRDSreport(
@@ -77,7 +77,7 @@ install_scRDSreport(profile = "full", species = "mouse")
 install.packages(c("BiocManager", "remotes"))
 
 remotes::install_github(
-  "Biobunengsi/scRDSreport",
+  "Biobunensi/scRDSreport",
   dependencies = NA,
   upgrade = "never",
   repos = BiocManager::repositories()

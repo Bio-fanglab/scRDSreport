@@ -84,7 +84,7 @@ install_scRDSreport <- function(input = NULL, profile = "full",
 
   repositories <- BiocManager::repositories()
   remotes::install_github(
-    "Biobunengsi/scRDSreport",
+    "Biobunensi/scRDSreport",
     dependencies = NA,
     upgrade = if (isTRUE(upgrade)) "always" else "never",
     repos = repositories,
