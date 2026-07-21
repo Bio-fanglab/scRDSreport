@@ -1,6 +1,6 @@
 # scRDSreport
 
-`scRDSreport` 把单细胞 RDS 整理成一个可浏览、可追溯、可下载的 Quarto 报告。它是 FangLab 原有 `script/run_scrnaseq.sh` + `script/scRNAseq.qmd` 中“RDS 分析与报告”部分的 R 包化增强版：保留原报告的主要分析结构，同时把固定的小鼠逻辑扩展为可审计的多物种资源系统。分析入口只有 `running()`；用户提供输入 RDS 和输出文件夹即可：
+`scRDSreport` 把单细胞 RDS 整理成一个可浏览、可追溯、可下载的 Quarto 报告。同时可审计多物种资源系统,分析入口只有 `running()`；用户提供输入 RDS 和输出文件夹即可：
 
 ```r
 library(scRDSreport)
