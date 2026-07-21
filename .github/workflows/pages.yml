@@ -36,7 +36,7 @@ jobs:
           touch _site/.nojekyll
           curl --fail --location --retry 5 --retry-all-errors \
             --output _site/report.html \
-            https://github.com/Bio-fanglab/scRDSreport/releases/download/example-report-v1/report.html
+            https://github.com/Biobunengsi/scRDSreport/releases/download/example-report-v1/report.html
           echo "b3b29d655a50423682be3202050239325132fccfa19c27841b2dffeee3efc9c9  _site/report.html" | sha256sum --check
 
       - name: Configure GitHub Pages
